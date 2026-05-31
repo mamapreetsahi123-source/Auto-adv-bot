@@ -75,10 +75,10 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isModalSubmit() && interaction.customId === 'adv_modal') {
         await interaction.reply({ content: '⏳ Connecting...', ephemeral: true });
 
-        const userToken = interaction.fields.getTextValue('user_token');
-        const messageText = interaction.fields.getTextValue('adv_msg');
-        const delay = parseInt(interaction.fields.getTextValue('adv_delay')) * 1000;
-        const channelIds = interaction.fields.getTextValue('adv_channels').split(',');
+        const userToken = interaction.fields.getTextInputValue('user_token');
+const messageText = interaction.fields.getTextInputValue('adv_msg');
+const delay = parseInt(interaction.fields.getTextInputValue('adv_delay')) * 1000;
+const channelIds = interaction.fields.getTextInputValue('adv_channels').split(',');
 
         const userSelfBot = new SelfClient({ checkUpdate: false });
         userSelfBot.on('ready', () => {
