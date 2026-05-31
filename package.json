@@ -1,14 +1,14 @@
 {
   "name": "auto-adv-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "Automated message bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.14.1",
-    "discord.js-selfbot-v13": "^13.0.0",
-    "express": "^4.18.2"
+    "discord.js": "latest",
+    "discord.js-selfbot-v13": "latest",
+    "express": "latest"
   }
 }
