@@ -4,7 +4,11 @@ const express = require('express');
 // This keeps your hosting container alive 24/7
 const app = express();
 app.get('/', (req, res) => res.send('Your Auto ADV System is Live!'));
-app.listen(3000);
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+    console.log(`Web server listening on port ${port}`);
+});
 
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
