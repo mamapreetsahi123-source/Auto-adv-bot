@@ -49,7 +49,7 @@ client.once('ready', async () => {
 client.on('interactionCreate', async (interaction) => {
     
     // Handle Slash Command /setup
-    if (interaction.isChatInput() && interaction.commandName === 'setup') {
+    if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
                 .setCustomId(`start_adv_btn_${interaction.user.id}`)
