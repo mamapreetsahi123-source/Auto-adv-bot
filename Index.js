@@ -5,13 +5,16 @@ const {
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
 const express = require('express');
 
-// --- 1. WEB SERVER ---
+// --- 1. CONFIGURATION ---
+const ALLOWED_GUILD_ID = '1493598034544820284'; 
+
+// --- 2. WEB SERVER ---
 const app = express();
 app.get('/', (req, res) => res.send('Bot is Online!'));
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Web server on port ${port}`));
 
-// --- 2. MAIN BOT SETUP ---
+// --- 3. MAIN BOT SETUP ---
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
 });
@@ -29,6 +32,7 @@ client.once('ready', async () => {
             name: 'setup', 
             description: 'Open your private Advertising Panel' 
         });
+        console.log(`Bot locked to Server ID: ${ALLOWED_GUILD_ID}`);
     } catch (e) { console.error(e); }
 });
 
@@ -45,16 +49,25 @@ function createButtons(userId, isProcessing = false, isStopped = false) {
     );
 }
 
-// --- 3. INTERACTION HANDLING ---
+// --- 4. INTERACTION HANDLING ---
 client.on('interactionCreate', async (interaction) => {
     
-    // 1. Handle /setup (With Single-Panel Check)
+    // SECURITY CHECK: Only allow interactions in your specific Server
+    if (interaction.guildId !== ALLOWED_GUILD_ID) {
+        if (interaction.isChatInputCommand()) {
+            return await interaction.reply({ 
+                content: "❌ **Access Denied.** This bot can only be used in the official server.", 
+                ephemeral: true 
+            });
+        }
+        return; 
+    }
+
+    // Handle /setup
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
-        
-        // CHECK: Does this user already have a task running?
         if (activeTasks.has(interaction.user.id)) {
             return await interaction.reply({ 
-                content: "⚠️ **You already have an active advertising panel running.** Please stop your current advertisement before creating a new setup.", 
+                content: "⚠️ **Active task found.** Stop your current panel first.", 
                 ephemeral: true 
             });
         }
@@ -65,10 +78,9 @@ client.on('interactionCreate', async (interaction) => {
         });
     }
 
-    // 2. Handle Buttons
+    // Handle Buttons
     if (interaction.isButton()) {
         const ownerId = interaction.customId.split('_').pop();
-
         if (interaction.user.id !== ownerId) {
             return await interaction.reply({ content: "❌ **Access Denied.**", ephemeral: true });
         }
@@ -83,8 +95,6 @@ client.on('interactionCreate', async (interaction) => {
                     content: `### 🤖 **PRIVATE CONTROL PANEL**\n✅ **Your advertisement stopped!**`,
                     components: [createButtons(ownerId, false, true)] 
                 });
-            } else {
-                await interaction.reply({ content: "❌ No active ads running.", ephemeral: true });
             }
         }
 
@@ -100,10 +110,9 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // 3. Modal Submission
+    // Modal Submission
     if (interaction.isModalSubmit() && interaction.customId.startsWith('adv_modal_')) {
         const ownerId = interaction.customId.split('_').pop();
-        
         await interaction.update({ 
             content: `### 🤖 **PRIVATE CONTROL PANEL**\n✅ **Your advertisement started!**`,
             components: [createButtons(ownerId, true, false)] 
@@ -131,7 +140,7 @@ client.on('interactionCreate', async (interaction) => {
 
         try { await userSelfBot.login(userToken); } 
         catch (err) { 
-            activeTasks.delete(ownerId); // Clean up if login fails
+            activeTasks.delete(ownerId);
             await interaction.followUp({ content: '❌ Invalid Token!', ephemeral: true }); 
         }
     }
