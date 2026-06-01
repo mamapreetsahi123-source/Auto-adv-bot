@@ -20,25 +20,17 @@ const activeTasks = new Map();
 
 client.once('ready', async () => {
     console.log(`Logged in as: ${client.user.tag}`);
-    
     try {
-        // --- COMMAND CLEANUP LOGIC ---
         const commands = await client.application.commands.fetch();
         for (const cmd of commands.values()) {
-            // Delete everything that IS NOT 'setup'
-            if (cmd.name !== 'setup') {
-                await client.application.commands.delete(cmd.id);
-                console.log(`Deleted old command: /${cmd.name}`);
-            }
+            if (cmd.name !== 'setup') await client.application.commands.delete(cmd.id);
         }
-
-        // Register ONLY /setup
         await client.application.commands.create({ 
             name: 'setup', 
             description: 'Open your private Advertising Panel' 
         });
-        console.log('Setup command is ready.');
-    } catch (e) { console.error('Error during cleanup:', e); }
+        console.log('Bot is ready and commands cleaned.');
+    } catch (e) { console.error(e); }
 });
 
 // Helper to create buttons locked to a specific User ID
@@ -58,13 +50,15 @@ function createButtons(userId, isProcessing = false, isStopped = false) {
 // --- 3. INTERACTION HANDLING ---
 client.on('interactionCreate', async (interaction) => {
     
+    // 1. Handle /setup
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
         await interaction.reply({ 
-            content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${interaction.user.id}>.`, 
+            content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${interaction.user.id}>.\n*Status: Awaiting Setup*`, 
             components: [createButtons(interaction.user.id)] 
         });
     }
 
+    // 2. Handle Buttons
     if (interaction.isButton()) {
         const isStart = interaction.customId.startsWith('start_btn_');
         const isStop = interaction.customId.startsWith('stop_btn_');
@@ -80,7 +74,11 @@ client.on('interactionCreate', async (interaction) => {
                 clearInterval(task.interval);
                 task.client.destroy();
                 activeTasks.delete(interaction.user.id);
-                await interaction.update({ components: [createButtons(ownerId, false, true)] });
+                // Update text to "stopped" and turn button red
+                await interaction.update({ 
+                    content: `### 🤖 **PRIVATE CONTROL PANEL**\n✅ **Your advertisement stopped!**`,
+                    components: [createButtons(ownerId, false, true)] 
+                });
             } else {
                 await interaction.reply({ content: "❌ No active ads running.", ephemeral: true });
             }
@@ -98,9 +96,15 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
+    // 3. Modal Submission
     if (interaction.isModalSubmit() && interaction.customId.startsWith('adv_modal_')) {
         const ownerId = interaction.customId.split('_').pop();
-        await interaction.update({ components: [createButtons(ownerId, true, false)] });
+        
+        // Update text to "started" and turn button green
+        await interaction.update({ 
+            content: `### 🤖 **PRIVATE CONTROL PANEL**\n✅ **Your advertisement started!**`,
+            components: [createButtons(ownerId, true, false)] 
+        });
 
         const userToken = interaction.fields.getTextInputValue('user_token');
         const messageText = interaction.fields.getTextInputValue('adv_msg');
