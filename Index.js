@@ -20,10 +20,25 @@ const activeTasks = new Map();
 
 client.once('ready', async () => {
     console.log(`Logged in as: ${client.user.tag}`);
+    
     try {
-        await client.application.commands.create({ name: 'setup', description: 'Open your private Advertising Panel' });
-        console.log('Setup command registered.');
-    } catch (e) { console.error(e); }
+        // --- COMMAND CLEANUP LOGIC ---
+        const commands = await client.application.commands.fetch();
+        for (const cmd of commands.values()) {
+            // Delete everything that IS NOT 'setup'
+            if (cmd.name !== 'setup') {
+                await client.application.commands.delete(cmd.id);
+                console.log(`Deleted old command: /${cmd.name}`);
+            }
+        }
+
+        // Register ONLY /setup
+        await client.application.commands.create({ 
+            name: 'setup', 
+            description: 'Open your private Advertising Panel' 
+        });
+        console.log('Setup command is ready.');
+    } catch (e) { console.error('Error during cleanup:', e); }
 });
 
 // Helper to create buttons locked to a specific User ID
@@ -43,7 +58,6 @@ function createButtons(userId, isProcessing = false, isStopped = false) {
 // --- 3. INTERACTION HANDLING ---
 client.on('interactionCreate', async (interaction) => {
     
-    // 1. Handle /setup command
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
         await interaction.reply({ 
             content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${interaction.user.id}>.`, 
@@ -51,22 +65,15 @@ client.on('interactionCreate', async (interaction) => {
         });
     }
 
-    // 2. Handle Button Clicks
     if (interaction.isButton()) {
-        // Extract the Owner ID from the button's customId
         const isStart = interaction.customId.startsWith('start_btn_');
         const isStop = interaction.customId.startsWith('stop_btn_');
         const ownerId = interaction.customId.split('_').pop();
 
-        // SECURITY CHECK: Is the person clicking the owner?
         if (interaction.user.id !== ownerId) {
-            return await interaction.reply({ 
-                content: "❌ **Access Denied.** You cannot control someone else's panel.", 
-                ephemeral: true 
-            });
+            return await interaction.reply({ content: "❌ **Access Denied.**", ephemeral: true });
         }
 
-        // STOP LOGIC
         if (isStop) {
             const task = activeTasks.get(interaction.user.id);
             if (task) {
@@ -79,7 +86,6 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
 
-        // START LOGIC
         if (isStart) {
             const modal = new ModalBuilder().setCustomId(`adv_modal_${ownerId}`).setTitle('Private AD Setup');
             modal.addComponents(
@@ -92,11 +98,8 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // 3. Modal Submission
     if (interaction.isModalSubmit() && interaction.customId.startsWith('adv_modal_')) {
         const ownerId = interaction.customId.split('_').pop();
-
-        // Update the original panel message buttons to green
         await interaction.update({ components: [createButtons(ownerId, true, false)] });
 
         const userToken = interaction.fields.getTextInputValue('user_token');
