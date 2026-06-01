@@ -21,21 +21,20 @@ const activeTasks = new Map();
 client.once('ready', async () => {
     console.log(`Logged in as: ${client.user.tag}`);
     try {
-        // ONLY register /setup
-        await client.application.commands.create({ name: 'setup', description: 'Open Advertising Panel' });
+        await client.application.commands.create({ name: 'setup', description: 'Open your private Advertising Panel' });
         console.log('Setup command registered.');
     } catch (e) { console.error(e); }
 });
 
-// Helper to create the panel buttons
-function createButtons(isProcessing = false, isStopped = false) {
+// Helper to create buttons locked to a specific User ID
+function createButtons(userId, isProcessing = false, isStopped = false) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-            .setCustomId('start_btn')
+            .setCustomId(`start_btn_${userId}`)
             .setLabel('🚀 Start Advertising')
             .setStyle(isProcessing ? ButtonStyle.Success : ButtonStyle.Primary),
         new ButtonBuilder()
-            .setCustomId('stop_btn')
+            .setCustomId(`stop_btn_${userId}`)
             .setLabel('🛑 Stop Advertising')
             .setStyle(isStopped ? ButtonStyle.Danger : ButtonStyle.Secondary)
     );
@@ -47,30 +46,42 @@ client.on('interactionCreate', async (interaction) => {
     // 1. Handle /setup command
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
         await interaction.reply({ 
-            content: "### 🤖 **ADVERTISING CONTROL PANEL**\nUse the buttons below to manage your account.", 
-            components: [createButtons()] 
+            content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${interaction.user.id}>.`, 
+            components: [createButtons(interaction.user.id)] 
         });
     }
 
     // 2. Handle Button Clicks
     if (interaction.isButton()) {
-        // STOP BUTTON
-        if (interaction.customId === 'stop_btn') {
+        // Extract the Owner ID from the button's customId
+        const isStart = interaction.customId.startsWith('start_btn_');
+        const isStop = interaction.customId.startsWith('stop_btn_');
+        const ownerId = interaction.customId.split('_').pop();
+
+        // SECURITY CHECK: Is the person clicking the owner?
+        if (interaction.user.id !== ownerId) {
+            return await interaction.reply({ 
+                content: "❌ **Access Denied.** You cannot control someone else's panel.", 
+                ephemeral: true 
+            });
+        }
+
+        // STOP LOGIC
+        if (isStop) {
             const task = activeTasks.get(interaction.user.id);
             if (task) {
                 clearInterval(task.interval);
                 task.client.destroy();
                 activeTasks.delete(interaction.user.id);
-                // Turn stop button red and start button back to blue
-                await interaction.update({ components: [createButtons(false, true)] });
+                await interaction.update({ components: [createButtons(ownerId, false, true)] });
             } else {
                 await interaction.reply({ content: "❌ No active ads running.", ephemeral: true });
             }
         }
 
-        // START BUTTON (Open Modal)
-        if (interaction.customId === 'start_btn') {
-            const modal = new ModalBuilder().setCustomId('adv_modal').setTitle('AD Setup');
+        // START LOGIC
+        if (isStart) {
+            const modal = new ModalBuilder().setCustomId(`adv_modal_${ownerId}`).setTitle('Private AD Setup');
             modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('user_token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('adv_msg').setLabel('Message').setStyle(TextInputStyle.Paragraph).setRequired(true)),
@@ -81,10 +92,12 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // 3. Modal Submission (The Engine)
-    if (interaction.isModalSubmit() && interaction.customId === 'adv_modal') {
-        // Change Start button to Green on the panel
-        await interaction.update({ components: [createButtons(true, false)] });
+    // 3. Modal Submission
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('adv_modal_')) {
+        const ownerId = interaction.customId.split('_').pop();
+
+        // Update the original panel message buttons to green
+        await interaction.update({ components: [createButtons(ownerId, true, false)] });
 
         const userToken = interaction.fields.getTextInputValue('user_token');
         const messageText = interaction.fields.getTextInputValue('adv_msg');
@@ -98,12 +111,12 @@ client.on('interactionCreate', async (interaction) => {
                     try {
                         const channel = await userSelfBot.channels.fetch(id);
                         if (channel) await channel.send(messageText);
-                    } catch (err) { console.error(err.message); }
+                    } catch (err) { console.error(`Error: ${err.message}`); }
                 }
             };
-            await sendAds(); // Send immediately
+            await sendAds();
             const intervalId = setInterval(sendAds, delay);
-            activeTasks.set(interaction.user.id, { client: userSelfBot, interval: intervalId });
+            activeTasks.set(ownerId, { client: userSelfBot, interval: intervalId });
         });
 
         try { await userSelfBot.login(userToken); } 
