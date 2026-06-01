@@ -29,11 +29,9 @@ client.once('ready', async () => {
             name: 'setup', 
             description: 'Open your private Advertising Panel' 
         });
-        console.log('Bot is ready and commands cleaned.');
     } catch (e) { console.error(e); }
 });
 
-// Helper to create buttons locked to a specific User ID
 function createButtons(userId, isProcessing = false, isStopped = false) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -50,8 +48,17 @@ function createButtons(userId, isProcessing = false, isStopped = false) {
 // --- 3. INTERACTION HANDLING ---
 client.on('interactionCreate', async (interaction) => {
     
-    // 1. Handle /setup
+    // 1. Handle /setup (With Single-Panel Check)
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
+        
+        // CHECK: Does this user already have a task running?
+        if (activeTasks.has(interaction.user.id)) {
+            return await interaction.reply({ 
+                content: "⚠️ **You already have an active advertising panel running.** Please stop your current advertisement before creating a new setup.", 
+                ephemeral: true 
+            });
+        }
+
         await interaction.reply({ 
             content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${interaction.user.id}>.\n*Status: Awaiting Setup*`, 
             components: [createButtons(interaction.user.id)] 
@@ -60,21 +67,18 @@ client.on('interactionCreate', async (interaction) => {
 
     // 2. Handle Buttons
     if (interaction.isButton()) {
-        const isStart = interaction.customId.startsWith('start_btn_');
-        const isStop = interaction.customId.startsWith('stop_btn_');
         const ownerId = interaction.customId.split('_').pop();
 
         if (interaction.user.id !== ownerId) {
             return await interaction.reply({ content: "❌ **Access Denied.**", ephemeral: true });
         }
 
-        if (isStop) {
+        if (interaction.customId.startsWith('stop_btn_')) {
             const task = activeTasks.get(interaction.user.id);
             if (task) {
                 clearInterval(task.interval);
                 task.client.destroy();
                 activeTasks.delete(interaction.user.id);
-                // Update text to "stopped" and turn button red
                 await interaction.update({ 
                     content: `### 🤖 **PRIVATE CONTROL PANEL**\n✅ **Your advertisement stopped!**`,
                     components: [createButtons(ownerId, false, true)] 
@@ -84,7 +88,7 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
 
-        if (isStart) {
+        if (interaction.customId.startsWith('start_btn_')) {
             const modal = new ModalBuilder().setCustomId(`adv_modal_${ownerId}`).setTitle('Private AD Setup');
             modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('user_token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
@@ -100,7 +104,6 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isModalSubmit() && interaction.customId.startsWith('adv_modal_')) {
         const ownerId = interaction.customId.split('_').pop();
         
-        // Update text to "started" and turn button green
         await interaction.update({ 
             content: `### 🤖 **PRIVATE CONTROL PANEL**\n✅ **Your advertisement started!**`,
             components: [createButtons(ownerId, true, false)] 
@@ -127,7 +130,10 @@ client.on('interactionCreate', async (interaction) => {
         });
 
         try { await userSelfBot.login(userToken); } 
-        catch (err) { await interaction.followUp({ content: '❌ Invalid Token!', ephemeral: true }); }
+        catch (err) { 
+            activeTasks.delete(ownerId); // Clean up if login fails
+            await interaction.followUp({ content: '❌ Invalid Token!', ephemeral: true }); 
+        }
     }
 });
 
