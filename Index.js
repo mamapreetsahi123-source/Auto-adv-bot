@@ -1,6 +1,6 @@
 const { 
     Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, 
-    ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle 
+    ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ActivityType 
 } = require('discord.js');
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
 const express = require('express');
@@ -23,6 +23,13 @@ const activeTasks = new Map();
 
 client.once('ready', async () => {
     console.log(`Logged in as: ${client.user.tag}`);
+
+    // SET PERMANENT STATUS IN ALL CAPS
+    client.user.setPresence({
+        activities: [{ name: 'GENGHIS KHAN', type: ActivityType.Playing }],
+        status: 'online',
+    });
+
     try {
         const commands = await client.application.commands.fetch();
         for (const cmd of commands.values()) {
