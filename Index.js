@@ -11,7 +11,7 @@ const {
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
 const express = require('express');
 
-// --- 1. WEB SERVER FOR RENDER ---
+// --- 1. WEB SERVER FOR RENDER (24/7) ---
 const app = express();
 app.get('/', (req, res) => res.send('Bot is Online!'));
 const port = process.env.PORT || 3000;
@@ -40,7 +40,6 @@ client.once('ready', async () => {
 // --- 3. INTERACTION HANDLING ---
 client.on('interactionCreate', async (interaction) => {
     
-    // Handle Slash Command /setup
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -51,7 +50,6 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ content: "### 🤖 **AD SYSTEM**\nClick start to begin.", components: [row] });
     }
 
-    // Handle Slash Command /stop
     if (interaction.isChatInputCommand() && interaction.commandName === 'stop') {
         const task = activeTasks.get(interaction.user.id);
         if (task) {
@@ -64,7 +62,6 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // Handle Button Click
     if (interaction.isButton() && interaction.customId.startsWith('start_btn_')) {
         if (interaction.user.id !== interaction.customId.replace('start_btn_', '')) {
             return await interaction.reply({ content: "❌ Not your panel!", ephemeral: true });
@@ -79,10 +76,8 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.showModal(modal);
     }
 
-    // --- 4. MODAL SUBMISSION ---
+    // --- 4. MODAL SUBMISSION (IMMEDIATE SEND + LOOP) ---
     if (interaction.isModalSubmit() && interaction.customId === 'adv_modal') {
-        
-        // CHANGED THIS MESSAGE AS REQUESTED
         await interaction.reply({ content: '✅ **Your advertising started!**', ephemeral: true });
 
         const userToken = interaction.fields.getTextInputValue('user_token');
@@ -92,21 +87,33 @@ client.on('interactionCreate', async (interaction) => {
 
         const userSelfBot = new SelfClient({ checkUpdate: false });
 
-        userSelfBot.on('ready', () => {
+        userSelfBot.on('ready', async () => {
             console.log(`Success: Loop started for ${userSelfBot.user.tag}`);
-            const intervalId = setInterval(async () => {
+
+            // Helper function to send to all channels
+            const sendAds = async () => {
                 for (let id of channelIds) {
                     try {
                         const channel = await userSelfBot.channels.fetch(id);
                         if (channel) await channel.send(messageText);
                     } catch (err) { console.error(`Error: ${err.message}`); }
                 }
-            }, delay);
+            };
+
+            // 1. Send IMMEDIATELY upon login
+            await sendAds();
+
+            // 2. Start the REGULAR interval
+            const intervalId = setInterval(sendAds, delay);
+            
             activeTasks.set(interaction.user.id, { client: userSelfBot, interval: intervalId });
         });
 
-        try { await userSelfBot.login(userToken); } 
-        catch (err) { await interaction.followUp({ content: '❌ Invalid Token!', ephemeral: true }); }
+        try { 
+            await userSelfBot.login(userToken); 
+        } catch (err) { 
+            await interaction.followUp({ content: '❌ Invalid Token!', ephemeral: true }); 
+        }
     }
 });
 
