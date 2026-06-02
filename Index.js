@@ -26,7 +26,7 @@ client.once('ready', async () => {
     });
 });
 
-function createButtons(userId, isProcessing = false, isStopped = false) {
+function createButtons(userId, isProcessing = false) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(`start_btn_${userId}`)
@@ -35,25 +35,27 @@ function createButtons(userId, isProcessing = false, isStopped = false) {
         new ButtonBuilder()
             .setCustomId(`stop_btn_${userId}`)
             .setLabel('🛑 Stop Advertising')
-            .setStyle(isStopped ? ButtonStyle.Danger : ButtonStyle.Secondary)
+            .setStyle(isProcessing ? ButtonStyle.Secondary : ButtonStyle.Danger)
     );
 }
 
 client.on('interactionCreate', async (interaction) => {
     if (interaction.guildId !== ALLOWED_GUILD_ID) return;
 
-    // Handle /setup
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
         await interaction.reply({ 
             content: `### 🤖 **PRIVATE CONTROL PANEL**\n*Status: Awaiting Setup*`, 
-            components: [createButtons(interaction.user.id)] 
+            components: [createButtons(interaction.user.id, false)] 
         });
     }
 
-    // Handle Buttons
     if (interaction.isButton()) {
         const ownerId = interaction.customId.split('_').pop();
-        if (interaction.user.id !== ownerId) return;
+        
+        // Security: Ensure only the panel owner can click buttons
+        if (interaction.user.id !== ownerId) {
+            return await interaction.reply({ content: "❌ **Access Denied.** This is not your panel.", ephemeral: true });
+        }
 
         if (interaction.customId.startsWith('stop_btn_')) {
             const task = activeTasks.get(interaction.user.id);
@@ -61,11 +63,21 @@ client.on('interactionCreate', async (interaction) => {
                 clearInterval(task.interval);
                 task.client.destroy();
                 activeTasks.delete(interaction.user.id);
-                await interaction.reply({ content: `✅ **Stopped!**`, ephemeral: true });
+                await interaction.update({ 
+                    content: `### 🤖 **PRIVATE CONTROL PANEL**\n🛑 **Advertising Stopped.**`,
+                    components: [createButtons(ownerId, false)] 
+                });
+            } else {
+                await interaction.reply({ content: "⚠️ No active task found to stop.", ephemeral: true });
             }
         }
 
         if (interaction.customId.startsWith('start_btn_')) {
+            // Prevent creating multiple panels
+            if (activeTasks.has(interaction.user.id)) {
+                return await interaction.reply({ content: "⚠️ **Error:** You already have an active advertising task running.", ephemeral: true });
+            }
+
             const modal = new ModalBuilder().setCustomId(`adv_modal_${ownerId}`).setTitle('Private AD Setup');
             modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('user_token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
@@ -77,11 +89,8 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // Modal Submission - THE FIX IS HERE
     if (interaction.isModalSubmit() && interaction.customId.startsWith('adv_modal_')) {
         const ownerId = interaction.customId.split('_').pop();
-        
-        // 1. Immediately acknowledge the interaction
         await interaction.deferUpdate(); 
 
         const userToken = interaction.fields.getTextInputValue('user_token');
@@ -104,10 +113,9 @@ client.on('interactionCreate', async (interaction) => {
             const intervalId = setInterval(sendAds, delay);
             activeTasks.set(ownerId, { client: userSelfBot, interval: intervalId });
             
-            // 2. Update the existing message
             await interaction.editReply({ 
-                content: `### 🤖 **PRIVATE CONTROL PANEL**\n✅ **Started!**`,
-                components: [createButtons(ownerId, true, false)] 
+                content: `### 🤖 **PRIVATE CONTROL PANEL**\n✅ **Advertising Started!**`,
+                components: [createButtons(ownerId, true)] 
             });
         });
 
