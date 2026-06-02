@@ -19,9 +19,9 @@ const client = new Client({
 const activeTasks = new Map();
 
 client.once('ready', async () => {
-    console.log(`Logged in as: ${client.user.tag}`);
+    console.log(`Main Bot Logged in as: ${client.user.tag}`);
     client.user.setPresence({
-        activities: [{ name: 'GENGHIS KHAN', type: ActivityType.Playing }],
+        activities: [{ name: 'PRIVATE AD PANEL', type: ActivityType.Playing }],
         status: 'online',
     });
 });
@@ -51,10 +51,8 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isButton()) {
         const ownerId = interaction.customId.split('_').pop();
-        
-        // Security: Ensure only the panel owner can click buttons
         if (interaction.user.id !== ownerId) {
-            return await interaction.reply({ content: "❌ **Access Denied.** This is not your panel.", ephemeral: true });
+            return await interaction.reply({ content: "❌ **Access Denied.**", ephemeral: true });
         }
 
         if (interaction.customId.startsWith('stop_btn_')) {
@@ -67,17 +65,13 @@ client.on('interactionCreate', async (interaction) => {
                     content: `### 🤖 **PRIVATE CONTROL PANEL**\n🛑 **Advertising Stopped.**`,
                     components: [createButtons(ownerId, false)] 
                 });
-            } else {
-                await interaction.reply({ content: "⚠️ No active task found to stop.", ephemeral: true });
             }
         }
 
         if (interaction.customId.startsWith('start_btn_')) {
-            // Prevent creating multiple panels
             if (activeTasks.has(interaction.user.id)) {
-                return await interaction.reply({ content: "⚠️ **Error:** You already have an active advertising task running.", ephemeral: true });
+                return await interaction.reply({ content: "⚠️ **Error:** Task already running.", ephemeral: true });
             }
-
             const modal = new ModalBuilder().setCustomId(`adv_modal_${ownerId}`).setTitle('Private AD Setup');
             modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('user_token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
@@ -91,7 +85,7 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('adv_modal_')) {
         const ownerId = interaction.customId.split('_').pop();
-        await interaction.deferUpdate(); 
+        await interaction.deferUpdate().catch(console.error);
 
         const userToken = interaction.fields.getTextInputValue('user_token');
         const messageText = interaction.fields.getTextInputValue('adv_msg');
@@ -100,7 +94,14 @@ client.on('interactionCreate', async (interaction) => {
 
         const userSelfBot = new SelfClient({ checkUpdate: false });
         
-        userSelfBot.on('ready', async () => {
+        // Timeout to prevent hanging
+        const loginTimeout = setTimeout(() => {
+            userSelfBot.destroy();
+            interaction.editReply({ content: '❌ Login timed out. Check your token.', components: [createButtons(ownerId, false)] }).catch(console.error);
+        }, 15000);
+
+        userSelfBot.once('ready', async () => {
+            clearTimeout(loginTimeout);
             const sendAds = async () => {
                 for (let id of channelIds) {
                     try {
@@ -116,13 +117,14 @@ client.on('interactionCreate', async (interaction) => {
             await interaction.editReply({ 
                 content: `### 🤖 **PRIVATE CONTROL PANEL**\n✅ **Advertising Started!**`,
                 components: [createButtons(ownerId, true)] 
-            });
+            }).catch(console.error);
         });
 
         try { await userSelfBot.login(userToken); } 
         catch (err) { 
+            clearTimeout(loginTimeout);
             activeTasks.delete(ownerId);
-            await interaction.followUp({ content: '❌ Invalid Token!', ephemeral: true }); 
+            await interaction.editReply({ content: '❌ Invalid Token!', components: [createButtons(ownerId, false)] }).catch(console.error);
         }
     }
 });
