@@ -20,17 +20,20 @@ client.once('ready', () => {
     console.log(`Bot Ready: ${client.user.tag}`);
 });
 
+// UI helper to match your screenshot
 function createButtons(userId, isProcessing = false) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(`start_btn_${userId}`)
-            .setLabel('🚀 Start')
-            .setStyle(isProcessing ? ButtonStyle.Secondary : ButtonStyle.Primary)
+            .setLabel('Start Advertising')
+            .setEmoji('🚀')
+            .setStyle(ButtonStyle.Primary)
             .setDisabled(isProcessing),
         new ButtonBuilder()
             .setCustomId(`stop_btn_${userId}`)
-            .setLabel('🛑 Stop')
-            .setStyle(isProcessing ? ButtonStyle.Danger : ButtonStyle.Secondary)
+            .setLabel('Stop Advertising')
+            .setEmoji('🛑')
+            .setStyle(ButtonStyle.Secondary)
             .setDisabled(!isProcessing)
     );
 }
@@ -39,7 +42,7 @@ client.on('interactionCreate', async (interaction) => {
     // 1. Handle Slash Command
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
         await interaction.reply({ 
-            content: `### 🤖 **Control Panel**`, 
+            content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${interaction.user.id}>.\n*Status: Awaiting Setup*`, 
             components: [createButtons(interaction.user.id, false)] 
         });
     }
@@ -47,24 +50,23 @@ client.on('interactionCreate', async (interaction) => {
     // 2. Handle Buttons
     if (interaction.isButton()) {
         const userId = interaction.customId.split('_').pop();
-        if (interaction.user.id !== userId) return interaction.reply({ content: "❌ Not yours.", ephemeral: true });
+        if (interaction.user.id !== userId) return interaction.reply({ content: "❌ Not your panel.", ephemeral: true });
 
         if (interaction.customId.startsWith('stop_btn_')) {
-            await interaction.deferUpdate(); // Acknowledge STOP button
+            await interaction.deferUpdate();
             const task = activeTasks.get(userId);
             if (task) {
                 clearInterval(task.interval);
                 task.client.destroy();
                 activeTasks.delete(userId);
                 await interaction.editReply({ 
-                    content: `🛑 **Stopped.**`, 
+                    content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${userId}>.\n*Status: Stopped*`, 
                     components: [createButtons(userId, false)] 
                 });
             }
         }
 
         if (interaction.customId.startsWith('start_btn_')) {
-            // DO NOT defer/reply here. Modals must be the first response.
             const modal = new ModalBuilder().setCustomId(`adv_modal_${userId}`).setTitle('Advertising Setup');
             modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
@@ -79,7 +81,7 @@ client.on('interactionCreate', async (interaction) => {
     // 3. Handle Modal Submission
     if (interaction.isModalSubmit() && interaction.customId.startsWith('adv_modal_')) {
         const userId = interaction.customId.split('_').pop();
-        await interaction.deferUpdate(); // Acknowledge modal submission
+        await interaction.deferUpdate();
 
         const token = interaction.fields.getTextInputValue('token');
         const msg = interaction.fields.getTextInputValue('msg');
@@ -99,13 +101,19 @@ client.on('interactionCreate', async (interaction) => {
             };
             await sendAds();
             activeTasks.set(userId, { client: userSelfBot, interval: setInterval(sendAds, delay) });
-            await interaction.editReply({ content: `✅ **Running!**`, components: [createButtons(userId, true)] });
+            await interaction.editReply({ 
+                content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${userId}>.\n*Status: Running* ✅`, 
+                components: [createButtons(userId, true)] 
+            });
         });
 
         try { 
             await userSelfBot.login(token); 
         } catch (e) { 
-            await interaction.editReply({ content: '❌ Invalid Token!', components: [createButtons(userId, false)] }); 
+            await interaction.editReply({ 
+                content: `### 🤖 **PRIVATE CONTROL PANEL**\n*Status: Error - Invalid Token* ❌`, 
+                components: [createButtons(userId, false)] 
+            }); 
         }
     }
 });
