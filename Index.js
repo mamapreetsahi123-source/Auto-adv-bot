@@ -5,7 +5,7 @@ const {
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
 const express = require('express');
 
-// Keep the bot alive on Render
+// Keep the service alive on Render
 const app = express();
 app.get('/', (req, res) => res.send('Bot is Online!'));
 app.listen(process.env.PORT || 3000);
@@ -49,16 +49,13 @@ client.on('interactionCreate', async (interaction) => {
         const userId = interaction.customId.split('_').pop();
         if (interaction.user.id !== userId) return interaction.reply({ content: "❌ Not yours.", ephemeral: true });
 
-        // Immediately acknowledge the interaction to prevent "Interaction failed"
-        await interaction.deferUpdate(); 
-
         if (interaction.customId.startsWith('stop_btn_')) {
+            await interaction.deferUpdate(); // Acknowledge STOP button
             const task = activeTasks.get(userId);
             if (task) {
                 clearInterval(task.interval);
                 task.client.destroy();
                 activeTasks.delete(userId);
-                // Use editReply after deferUpdate
                 await interaction.editReply({ 
                     content: `🛑 **Stopped.**`, 
                     components: [createButtons(userId, false)] 
@@ -67,6 +64,7 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.customId.startsWith('start_btn_')) {
+            // DO NOT defer/reply here. Modals must be the first response.
             const modal = new ModalBuilder().setCustomId(`adv_modal_${userId}`).setTitle('Advertising Setup');
             modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
@@ -74,8 +72,6 @@ client.on('interactionCreate', async (interaction) => {
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('delay').setLabel('Delay (sec)').setValue('60').setStyle(TextInputStyle.Short).setRequired(true)),
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channels').setLabel('Channel IDs (comma separated)').setStyle(TextInputStyle.Paragraph).setRequired(true))
             );
-            // showModal cannot be called after deferUpdate, so we handle logic flow differently if needed.
-            // Note: For simple setups, use showModal directly:
             return interaction.showModal(modal);
         }
     }
@@ -83,7 +79,7 @@ client.on('interactionCreate', async (interaction) => {
     // 3. Handle Modal Submission
     if (interaction.isModalSubmit() && interaction.customId.startsWith('adv_modal_')) {
         const userId = interaction.customId.split('_').pop();
-        await interaction.deferUpdate();
+        await interaction.deferUpdate(); // Acknowledge modal submission
 
         const token = interaction.fields.getTextInputValue('token');
         const msg = interaction.fields.getTextInputValue('msg');
