@@ -5,7 +5,6 @@ const {
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
 const express = require('express');
 
-// Keep the service alive on Render
 const app = express();
 app.get('/', (req, res) => res.send('Bot is Online!'));
 app.listen(process.env.PORT || 3000);
@@ -20,7 +19,6 @@ client.once('ready', () => {
     console.log(`Bot Ready: ${client.user.tag}`);
 });
 
-// UI helper: Preserved exactly as requested
 function createButtons(userId, isProcessing = false) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -39,18 +37,24 @@ function createButtons(userId, isProcessing = false) {
 }
 
 client.on('interactionCreate', async (interaction) => {
-    // 1. Handle Slash Command
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
+        // Prevent multiple panels for the same user
+        if (activeTasks.has(interaction.user.id)) {
+            return interaction.reply({ content: "⚠️ You already have an active advertising panel running!", ephemeral: true });
+        }
         await interaction.reply({ 
             content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${interaction.user.id}>.\n*Status: Awaiting Setup*`, 
             components: [createButtons(interaction.user.id, false)] 
         });
     }
 
-    // 2. Handle Buttons
     if (interaction.isButton()) {
         const userId = interaction.customId.split('_').pop();
-        if (interaction.user.id !== userId) return interaction.reply({ content: "❌ Not your panel.", ephemeral: true });
+        
+        // PROTECTION: Only the person who created the panel can click its buttons
+        if (interaction.user.id !== userId) {
+            return interaction.reply({ content: "❌ This is not your panel!", ephemeral: true });
+        }
 
         if (interaction.customId.startsWith('stop_btn_')) {
             await interaction.deferUpdate();
@@ -67,6 +71,10 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (interaction.customId.startsWith('start_btn_')) {
+            // PROTECTION: Prevent starting if already active
+            if (activeTasks.has(userId)) {
+                return interaction.reply({ content: "⚠️ You already have a task running!", ephemeral: true });
+            }
             const modal = new ModalBuilder().setCustomId(`adv_modal_${userId}`).setTitle('Advertising Setup');
             modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
@@ -78,7 +86,6 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // 3. Handle Modal Submission
     if (interaction.isModalSubmit() && interaction.customId.startsWith('adv_modal_')) {
         const userId = interaction.customId.split('_').pop();
         await interaction.deferUpdate();
@@ -100,9 +107,7 @@ client.on('interactionCreate', async (interaction) => {
                 }
             };
 
-            // Immediate execution before interval starts
             await sendAds();
-            
             activeTasks.set(userId, { client: userSelfBot, interval: setInterval(sendAds, delay) });
             await interaction.editReply({ 
                 content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${userId}>.\n*Status: Running* ✅`, 
