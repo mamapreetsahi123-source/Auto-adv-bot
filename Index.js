@@ -20,7 +20,7 @@ client.once('ready', () => {
     console.log(`Bot Ready: ${client.user.tag}`);
 });
 
-// UI helper to match your screenshot
+// UI helper: Preserved exactly as requested
 function createButtons(userId, isProcessing = false) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -99,7 +99,10 @@ client.on('interactionCreate', async (interaction) => {
                     } catch (e) { console.error(e); }
                 }
             };
+
+            // Immediate execution before interval starts
             await sendAds();
+            
             activeTasks.set(userId, { client: userSelfBot, interval: setInterval(sendAds, delay) });
             await interaction.editReply({ 
                 content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${userId}>.\n*Status: Running* ✅`, 
