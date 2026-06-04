@@ -5,12 +5,9 @@ const {
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
 const express = require('express');
 
-const ALLOWED_GUILD_ID = '1493598034544820284'; 
-
 const app = express();
 app.get('/', (req, res) => res.send('Bot is Online!'));
-const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Web server on port ${port}`));
+app.listen(process.env.PORT || 3000);
 
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
@@ -18,66 +15,54 @@ const client = new Client({
 
 const activeTasks = new Map();
 
-client.once('ready', async () => {
-    console.log(`Main Bot Logged in as: ${client.user.tag}`);
-    client.user.setPresence({
-        activities: [{ name: 'PRIVATE AD PANEL', type: ActivityType.Playing }],
-        status: 'online',
-    });
+client.once('ready', () => {
+    console.log(`Bot Ready: ${client.user.tag}`);
 });
 
 function createButtons(userId, isProcessing = false) {
     return new ActionRowBuilder().addComponents(
         new ButtonBuilder()
             .setCustomId(`start_btn_${userId}`)
-            .setLabel('🚀 Start Advertising')
-            .setStyle(isProcessing ? ButtonStyle.Success : ButtonStyle.Primary),
+            .setLabel('🚀 Start')
+            .setStyle(isProcessing ? ButtonStyle.Secondary : ButtonStyle.Primary)
+            .setDisabled(isProcessing),
         new ButtonBuilder()
             .setCustomId(`stop_btn_${userId}`)
-            .setLabel('🛑 Stop Advertising')
-            .setStyle(isProcessing ? ButtonStyle.Secondary : ButtonStyle.Danger)
+            .setLabel('🛑 Stop')
+            .setStyle(isProcessing ? ButtonStyle.Danger : ButtonStyle.Secondary)
+            .setDisabled(!isProcessing)
     );
 }
 
 client.on('interactionCreate', async (interaction) => {
-    if (interaction.guildId !== ALLOWED_GUILD_ID) return;
-
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
-        await interaction.reply({ 
-            content: `### 🤖 **PRIVATE CONTROL PANEL**\n*Status: Awaiting Setup*`, 
-            components: [createButtons(interaction.user.id, false)] 
-        });
+        await interaction.reply({ content: `### 🤖 **Control Panel**`, components: [createButtons(interaction.user.id, false)] });
     }
 
     if (interaction.isButton()) {
         const ownerId = interaction.customId.split('_').pop();
-        if (interaction.user.id !== ownerId) {
-            return await interaction.reply({ content: "❌ **Access Denied.**", ephemeral: true });
-        }
+        if (interaction.user.id !== ownerId) return interaction.reply({ content: "❌ Not yours.", ephemeral: true });
+
+        // ALWAYS ACKNOWLEDGE IMMEDIATELY
+        await interaction.deferUpdate(); 
 
         if (interaction.customId.startsWith('stop_btn_')) {
-            const task = activeTasks.get(interaction.user.id);
+            const task = activeTasks.get(ownerId);
             if (task) {
                 clearInterval(task.interval);
                 task.client.destroy();
-                activeTasks.delete(interaction.user.id);
-                await interaction.update({ 
-                    content: `### 🤖 **PRIVATE CONTROL PANEL**\n🛑 **Advertising Stopped.**`,
-                    components: [createButtons(ownerId, false)] 
-                });
+                activeTasks.delete(ownerId);
+                await interaction.editReply({ content: `🛑 **Stopped.**`, components: [createButtons(ownerId, false)] });
             }
         }
 
         if (interaction.customId.startsWith('start_btn_')) {
-            if (activeTasks.has(interaction.user.id)) {
-                return await interaction.reply({ content: "⚠️ **Error:** Task already running.", ephemeral: true });
-            }
-            const modal = new ModalBuilder().setCustomId(`adv_modal_${ownerId}`).setTitle('Private AD Setup');
+            const modal = new ModalBuilder().setCustomId(`adv_modal_${ownerId}`).setTitle('Advertising Setup');
             modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('user_token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('adv_msg').setLabel('Message').setStyle(TextInputStyle.Paragraph).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('adv_delay').setLabel('Delay (sec)').setValue('60').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('adv_channels').setLabel('Channel IDs').setStyle(TextInputStyle.Paragraph).setRequired(true))
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('msg').setLabel('Message').setStyle(TextInputStyle.Paragraph).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('delay').setLabel('Delay (sec)').setValue('60').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channels').setLabel('Channel IDs').setStyle(TextInputStyle.Paragraph).setRequired(true))
             );
             await interaction.showModal(modal);
         }
@@ -85,47 +70,31 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isModalSubmit() && interaction.customId.startsWith('adv_modal_')) {
         const ownerId = interaction.customId.split('_').pop();
-        await interaction.deferUpdate().catch(console.error);
+        await interaction.deferUpdate();
 
-        const userToken = interaction.fields.getTextInputValue('user_token');
-        const messageText = interaction.fields.getTextInputValue('adv_msg');
-        const delay = parseInt(interaction.fields.getTextInputValue('adv_delay')) * 1000;
-        const channelIds = interaction.fields.getTextInputValue('adv_channels').split(',').map(id => id.trim());
+        const token = interaction.fields.getTextInputValue('token');
+        const msg = interaction.fields.getTextInputValue('msg');
+        const delay = parseInt(interaction.fields.getTextInputValue('delay')) * 1000;
+        const channels = interaction.fields.getTextInputValue('channels').split(',').map(id => id.trim());
 
         const userSelfBot = new SelfClient({ checkUpdate: false });
         
-        // Timeout to prevent hanging
-        const loginTimeout = setTimeout(() => {
-            userSelfBot.destroy();
-            interaction.editReply({ content: '❌ Login timed out. Check your token.', components: [createButtons(ownerId, false)] }).catch(console.error);
-        }, 15000);
-
         userSelfBot.once('ready', async () => {
-            clearTimeout(loginTimeout);
             const sendAds = async () => {
-                for (let id of channelIds) {
+                for (let id of channels) {
                     try {
                         const channel = await userSelfBot.channels.fetch(id);
-                        if (channel) await channel.send(messageText);
-                    } catch (err) { console.error(`Error: ${err.message}`); }
+                        if (channel) await channel.send(msg);
+                    } catch (e) { console.error(e); }
                 }
             };
             await sendAds();
-            const intervalId = setInterval(sendAds, delay);
-            activeTasks.set(ownerId, { client: userSelfBot, interval: intervalId });
-            
-            await interaction.editReply({ 
-                content: `### 🤖 **PRIVATE CONTROL PANEL**\n✅ **Advertising Started!**`,
-                components: [createButtons(ownerId, true)] 
-            }).catch(console.error);
+            activeTasks.set(ownerId, { client: userSelfBot, interval: setInterval(sendAds, delay) });
+            await interaction.editReply({ content: `✅ **Running!**`, components: [createButtons(ownerId, true)] });
         });
 
-        try { await userSelfBot.login(userToken); } 
-        catch (err) { 
-            clearTimeout(loginTimeout);
-            activeTasks.delete(ownerId);
-            await interaction.editReply({ content: '❌ Invalid Token!', components: [createButtons(ownerId, false)] }).catch(console.error);
-        }
+        try { await userSelfBot.login(token); } 
+        catch (e) { await interaction.editReply({ content: '❌ Invalid Token!', components: [createButtons(ownerId, false)] }); }
     }
 });
 
