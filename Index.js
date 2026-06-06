@@ -38,6 +38,15 @@ function createButtons(userId, isProcessing = false) {
 
 client.on('interactionCreate', async (interaction) => {
     if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
+        
+        // RESTRICTION: Only allow command in the specific Server ID
+        if (interaction.guildId !== '1493598034544820284') {
+            return interaction.reply({ 
+                content: "❌ This command is restricted to the authorized server.", 
+                ephemeral: true 
+            });
+        }
+
         // Prevent multiple panels for the same user
         if (activeTasks.has(interaction.user.id)) {
             return interaction.reply({ content: "⚠️ You already have an active advertising panel running!", ephemeral: true });
