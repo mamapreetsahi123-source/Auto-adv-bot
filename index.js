@@ -16,7 +16,6 @@ const AUTHORIZED_ID = '1277163202614001706';
 client.once('ready', async () => {
     console.log(`Bot logged as ${client.user.tag}`);
     
-    // Register /adv commands
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     const commands = [{
         name: 'adv',
@@ -111,16 +110,13 @@ client.on('interactionCreate', async (interaction) => {
                 }
             };
 
-            // Send first message immediately
             await sendAds();
-            
-            // Set interval for subsequent messages
             taskObj.interval = setInterval(sendAds, delay);
             activeTasks.set(interaction.user.id, taskObj);
         });
 
         await userSelfBot.login(token).catch(() => {});
-        interaction.reply({ content: "🚀 Advertising started! First message sent immediately.", ephemeral: true });
+        interaction.reply({ content: "✅ Your advertisement is started.", ephemeral: true });
     }
 });
 
