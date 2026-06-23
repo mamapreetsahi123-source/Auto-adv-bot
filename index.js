@@ -1,22 +1,34 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, REST, Routes } = require('discord.js');
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
 
-// Added MessageContent intent to listen for "!panel"
 const client = new Client({ 
-    intents: [
-        GatewayIntentBits.Guilds, 
-        GatewayIntentBits.GuildMessages, 
-        GatewayIntentBits.MessageContent 
-    ] 
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] 
 });
 
 const activeTasks = new Map();
 const AUTHORIZED_ID = '1277163202614001706';
 
-client.on('ready', () => console.log(`Bot logged as ${client.user.tag}`));
+client.once('ready', async () => {
+    console.log(`Bot logged as ${client.user.tag}`);
+    
+    // WIPE OLD COMMANDS: Run this once then you can remove this block
+    // await client.application.commands.set([]); 
+    
+    // REGISTER ONLY THE /adv COMMAND
+    const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+    const commands = [{
+        name: 'adv',
+        description: 'Advertising management',
+        options: [
+            { name: 'status', description: 'Check advertising status', type: 1 },
+            { name: 'stop', description: 'Stop all advertising', type: 1 }
+        ]
+    }];
+    await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+});
 
-// 1. Listen for !panel command
+// !panel Command
 client.on('messageCreate', async (message) => {
     if (message.content === '!panel' && message.author.id === AUTHORIZED_ID) {
         const embed = new EmbedBuilder()
@@ -27,13 +39,13 @@ client.on('messageCreate', async (message) => {
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('start_adv_btn').setLabel('Start Advertising').setStyle(ButtonStyle.Primary)
         );
-
         return message.channel.send({ embeds: [embed], components: [row] });
     }
 });
 
-// 2. Button and Modal Handling (Interaction-based)
+// Interactions (Buttons, Modals, Slash Commands)
 client.on('interactionCreate', async (interaction) => {
+    // Button: Open Modal
     if (interaction.isButton() && interaction.customId === 'start_adv_btn') {
         const modal = new ModalBuilder().setCustomId('adv_modal').setTitle('Advertising Setup');
         modal.addComponents(
@@ -45,18 +57,14 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.showModal(modal);
     }
 
-    // 3. /adv Subcommands (Status/Stop)
-    // NOTE: Keep these as slash commands if you prefer, or change to message commands
+    // Slash Commands: /adv status or /adv stop
     if (interaction.isChatInputCommand() && interaction.commandName === 'adv') {
         const sub = interaction.options.getSubcommand();
         const task = activeTasks.get(interaction.user.id);
 
         if (sub === 'status') {
             if (!task) return interaction.reply({ content: "No task is running.", ephemeral: true });
-            return interaction.reply({ 
-                content: `### 📊 Advertising Status\n**State:** ${task.running ? 'Running ✅' : 'Stopped 🛑'}\n**Messages Sent:** ${task.sent}\n**Failed Attempts:** ${task.failed}`, 
-                ephemeral: true 
-            });
+            return interaction.reply({ content: `### 📊 Status\n**State:** ${task.running ? 'Running ✅' : 'Stopped 🛑'}\n**Sent:** ${task.sent}\n**Failed:** ${task.failed}`, ephemeral: true });
         }
 
         if (sub === 'stop') {
@@ -64,10 +72,11 @@ client.on('interactionCreate', async (interaction) => {
             clearInterval(task.interval);
             task.client.destroy();
             activeTasks.delete(interaction.user.id);
-            return interaction.reply({ content: "Advertising has been stopped.", ephemeral: true });
+            return interaction.reply({ content: "Advertising stopped.", ephemeral: true });
         }
     }
 
+    // Modal Submit
     if (interaction.isModalSubmit() && interaction.customId === 'adv_modal') {
         const token = interaction.fields.getTextInputValue('token');
         const msg = interaction.fields.getTextInputValue('msg');
@@ -78,7 +87,7 @@ client.on('interactionCreate', async (interaction) => {
         
         userSelfBot.once('ready', async () => {
             const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0 };
-            const taskLoop = setInterval(async () => {
+            taskObj.interval = setInterval(async () => {
                 for (const id of channels) {
                     try {
                         const channel = await userSelfBot.channels.fetch(id);
@@ -87,12 +96,11 @@ client.on('interactionCreate', async (interaction) => {
                     } catch { taskObj.failed++; }
                 }
             }, delay);
-            taskObj.interval = taskLoop;
             activeTasks.set(interaction.user.id, taskObj);
         });
 
         await userSelfBot.login(token).catch(() => {});
-        interaction.reply({ content: "✅ Advertising task started!", ephemeral: true });
+        interaction.reply({ content: "✅ Task started!", ephemeral: true });
     }
 });
 
