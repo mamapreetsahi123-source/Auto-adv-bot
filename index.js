@@ -1,104 +1,66 @@
-const { 
-    Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, 
-    ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle 
-} = require('discord.js');
+require('dotenv').config(); // Ensure you have a .env file with DISCORD_TOKEN
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
-const express = require('express');
 
-const app = express();
-app.get('/', (req, res) => res.send('Bot is Online!'));
-app.listen(process.env.PORT || 3000);
-
-const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
-});
-
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const activeTasks = new Map();
+const AUTHORIZED_ID = '1277163202614001706';
 
-client.once('ready', () => {
-    console.log(`Bot Ready: ${client.user.tag}`);
-});
-
-function createButtons(userId, isProcessing = false) {
-    return new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId(`start_btn_${userId}`)
-            .setLabel('Start Advertising')
-            .setEmoji('🚀')
-            .setStyle(ButtonStyle.Primary)
-            .setDisabled(isProcessing),
-        new ButtonBuilder()
-            .setCustomId(`stop_btn_${userId}`)
-            .setLabel('Stop Advertising')
-            .setEmoji('🛑')
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(!isProcessing)
-    );
-}
+client.on('ready', () => console.log(`Bot logged as ${client.user.tag}`));
 
 client.on('interactionCreate', async (interaction) => {
-    if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
+    // Panel Command
+    if (interaction.isChatInputCommand() && interaction.commandName === 'panel') {
+        if (interaction.user.id !== AUTHORIZED_ID) return interaction.reply({ content: "Unauthorized.", ephemeral: true });
         
-        // RESTRICTION: Only allow command in the specific Server ID
-        if (interaction.guildId !== '1493598034544820284') {
+        const embed = new EmbedBuilder()
+            .setTitle("🚀 Advertising Control Panel")
+            .setDescription("Click the button below to configure and start your advertising.")
+            .setColor(0x0099ff);
+        
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('start_adv_btn').setLabel('Start Advertising').setStyle(ButtonStyle.Primary)
+        );
+
+        return interaction.reply({ embeds: [embed], components: [row] });
+    }
+
+    // Modal Trigger
+    if (interaction.isButton() && interaction.customId === 'start_adv_btn') {
+        const modal = new ModalBuilder().setCustomId('adv_modal').setTitle('Advertising Setup');
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('msg').setLabel('Message').setStyle(TextInputStyle.Paragraph).setRequired(true)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('delay').setLabel('Delay (seconds)').setValue('60').setStyle(TextInputStyle.Short).setRequired(true)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channels').setLabel('Channel IDs (comma separated)').setStyle(TextInputStyle.Paragraph).setRequired(true))
+        );
+        return interaction.showModal(modal);
+    }
+
+    // Adv Subcommands
+    if (interaction.isChatInputCommand() && interaction.commandName === 'adv') {
+        const sub = interaction.options.getSubcommand();
+        const task = activeTasks.get(interaction.user.id);
+
+        if (sub === 'status') {
+            if (!task) return interaction.reply({ content: "No task is currently running.", ephemeral: true });
             return interaction.reply({ 
-                content: "❌ This command is restricted to the authorized server.", 
+                content: `### 📊 Advertising Status\n**State:** ${task.running ? 'Running ✅' : 'Stopped 🛑'}\n**Messages Sent:** ${task.sent}\n**Failed Attempts:** ${task.failed}`, 
                 ephemeral: true 
             });
         }
 
-        // Prevent multiple panels for the same user
-        if (activeTasks.has(interaction.user.id)) {
-            return interaction.reply({ content: "⚠️ You already have an active advertising panel running!", ephemeral: true });
-        }
-        await interaction.reply({ 
-            content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${interaction.user.id}>.\n*Status: Awaiting Setup*`, 
-            components: [createButtons(interaction.user.id, false)] 
-        });
-    }
-
-    if (interaction.isButton()) {
-        const userId = interaction.customId.split('_').pop();
-        
-        // PROTECTION: Only the person who created the panel can click its buttons
-        if (interaction.user.id !== userId) {
-            return interaction.reply({ content: "❌ This is not your panel!", ephemeral: true });
-        }
-
-        if (interaction.customId.startsWith('stop_btn_')) {
-            await interaction.deferUpdate();
-            const task = activeTasks.get(userId);
-            if (task) {
-                clearInterval(task.interval);
-                task.client.destroy();
-                activeTasks.delete(userId);
-                await interaction.editReply({ 
-                    content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${userId}>.\n*Status: Stopped*`, 
-                    components: [createButtons(userId, false)] 
-                });
-            }
-        }
-
-        if (interaction.customId.startsWith('start_btn_')) {
-            // PROTECTION: Prevent starting if already active
-            if (activeTasks.has(userId)) {
-                return interaction.reply({ content: "⚠️ You already have a task running!", ephemeral: true });
-            }
-            const modal = new ModalBuilder().setCustomId(`adv_modal_${userId}`).setTitle('Advertising Setup');
-            modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('msg').setLabel('Message').setStyle(TextInputStyle.Paragraph).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('delay').setLabel('Delay (sec)').setValue('60').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channels').setLabel('Channel IDs (comma separated)').setStyle(TextInputStyle.Paragraph).setRequired(true))
-            );
-            return interaction.showModal(modal);
+        if (sub === 'stop') {
+            if (!task) return interaction.reply({ content: "No task is active to stop.", ephemeral: true });
+            clearInterval(task.interval);
+            task.client.destroy();
+            activeTasks.delete(interaction.user.id);
+            return interaction.reply({ content: "Advertising has been stopped.", ephemeral: true });
         }
     }
 
-    if (interaction.isModalSubmit() && interaction.customId.startsWith('adv_modal_')) {
-        const userId = interaction.customId.split('_').pop();
-        await interaction.deferUpdate();
-
+    // Modal Handling
+    if (interaction.isModalSubmit() && interaction.customId === 'adv_modal') {
         const token = interaction.fields.getTextInputValue('token');
         const msg = interaction.fields.getTextInputValue('msg');
         const delay = parseInt(interaction.fields.getTextInputValue('delay')) * 1000;
@@ -107,31 +69,27 @@ client.on('interactionCreate', async (interaction) => {
         const userSelfBot = new SelfClient({ checkUpdate: false });
         
         userSelfBot.once('ready', async () => {
-            const sendAds = async () => {
-                for (let id of channels) {
+            const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0 };
+            
+            const taskLoop = setInterval(async () => {
+                for (const id of channels) {
                     try {
                         const channel = await userSelfBot.channels.fetch(id);
-                        if (channel) await channel.send(msg);
-                    } catch (e) { console.error(e); }
+                        await channel.send(msg);
+                        taskObj.sent++;
+                    } catch { taskObj.failed++; }
                 }
-            };
-
-            await sendAds();
-            activeTasks.set(userId, { client: userSelfBot, interval: setInterval(sendAds, delay) });
-            await interaction.editReply({ 
-                content: `### 🤖 **PRIVATE CONTROL PANEL**\nThis panel is locked to <@${userId}>.\n*Status: Running* ✅`, 
-                components: [createButtons(userId, true)] 
-            });
+            }, delay);
+            
+            taskObj.interval = taskLoop;
+            activeTasks.set(interaction.user.id, taskObj);
         });
 
-        try { 
-            await userSelfBot.login(token); 
-        } catch (e) { 
-            await interaction.editReply({ 
-                content: `### 🤖 **PRIVATE CONTROL PANEL**\n*Status: Error - Invalid Token* ❌`, 
-                components: [createButtons(userId, false)] 
-            }); 
-        }
+        await userSelfBot.login(token).catch(err => {
+            return interaction.reply({ content: "❌ Failed to login: Invalid Token", ephemeral: true });
+        });
+        
+        interaction.reply({ content: "✅ Advertising task started successfully!", ephemeral: true });
     }
 });
 
