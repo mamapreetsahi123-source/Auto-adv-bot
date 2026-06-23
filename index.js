@@ -20,8 +20,8 @@ client.once('ready', async () => {
         name: 'adv',
         description: 'Advertising management',
         options: [
-            { name: 'status', description: 'Check advertising status', type: 1 },
-            { name: 'stop', description: 'Stop all advertising', type: 1 }
+            { name: 'status', description: 'Check status', type: 1 },
+            { name: 'stop', description: 'Stop advertising', type: 1 }
         ]
     }];
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
@@ -31,12 +31,11 @@ client.on('messageCreate', async (message) => {
     if (message.content === '!panel' && message.author.id === AUTHORIZED_ID) {
         const embed = new EmbedBuilder()
             .setTitle("🚀 Advertising Control Panel")
-            .setDescription("Welcome to the advanced automated advertising suite. Use the controls below to manage your campaigns.")
+            .setDescription("Welcome to the advanced automated advertising suite. Manage your campaigns below.")
             .setColor(0x5865F2)
             .addFields(
-                { name: "📋 Setup Instructions", value: "Click the **Start Advertising** button to configure your campaign.", inline: false },
-                { name: "\u200b", value: "\u200b" },
-                { name: "⚙️ Management Commands", value: "• `/adv status` — View active campaign stats.\n• `/adv stop` — Terminate active tasks.", inline: false }
+                { name: "📋 Setup", value: "Click the **Start Advertising** button to configure your campaign.", inline: false },
+                { name: "⚙️ Commands", value: "• `/adv status` — View active stats.\n• `/adv stop` — Terminate all tasks.", inline: false }
             )
             .setFooter({ text: "Auto-Adv System | Secured" })
             .setTimestamp();
@@ -64,9 +63,9 @@ client.on('interactionCreate', async (interaction) => {
         const sub = interaction.options.getSubcommand();
         const task = activeTasks.get(interaction.user.id);
         if (sub === 'status') {
-            if (!task) return interaction.reply({ content: "❌ No active task found.", ephemeral: true });
+            if (!task) return interaction.reply({ content: "❌ No active task.", ephemeral: true });
             return interaction.reply({ 
-                embeds: [new EmbedBuilder().setTitle("📊 Campaign Status").addFields(
+                embeds: [new EmbedBuilder().setTitle("📊 Status").addFields(
                     { name: "State", value: task.running ? "Running ✅" : "Stopped 🛑", inline: true },
                     { name: "Sent", value: task.sent.toString(), inline: true },
                     { name: "Failed", value: task.failed.toString(), inline: true }
@@ -74,17 +73,16 @@ client.on('interactionCreate', async (interaction) => {
             });
         }
         if (sub === 'stop') {
-            if (!task) return interaction.reply({ content: "❌ No task active to stop.", ephemeral: true });
+            if (!task) return interaction.reply({ content: "❌ No task active.", ephemeral: true });
             clearInterval(task.interval);
             task.client.destroy();
             activeTasks.delete(interaction.user.id);
-            return interaction.reply({ content: "✅ Advertising campaign has been successfully terminated.", ephemeral: true });
+            return interaction.reply({ content: "✅ Advertising terminated.", ephemeral: true });
         }
     }
 
     if (interaction.isModalSubmit() && interaction.customId === 'adv_modal') {
-        // 1. MUST DEFER IMMEDIATELY
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.reply({ content: "🚀 Processing your request...", ephemeral: true });
         
         const token = interaction.fields.getTextInputValue('token');
         const msg = interaction.fields.getTextInputValue('msg');
@@ -92,15 +90,17 @@ client.on('interactionCreate', async (interaction) => {
         const channels = interaction.fields.getTextInputValue('channels').split(',').map(id => id.trim());
 
         const userSelfBot = new SelfClient({ checkUpdate: false });
+        let finished = false;
 
-        // 2. Use a timeout to prevent infinite "thinking"
-        const timeout = setTimeout(() => {
-            userSelfBot.destroy();
-            interaction.editReply({ content: "❌ Connection timed out. Please check your token or channel IDs." }).catch(() => {});
+        setTimeout(() => {
+            if (!finished) {
+                userSelfBot.destroy();
+                interaction.editReply({ content: "❌ Connection timeout. Check your Token." }).catch(() => {});
+            }
         }, 15000);
 
         userSelfBot.once('ready', async () => {
-            clearTimeout(timeout);
+            finished = true;
             const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0 };
             const sendAds = async () => {
                 for (const id of channels) {
@@ -113,21 +113,20 @@ client.on('interactionCreate', async (interaction) => {
                     } catch { taskObj.failed++; }
                 }
             };
-
             try {
                 await sendAds();
                 taskObj.interval = setInterval(sendAds, delay);
                 activeTasks.set(interaction.user.id, taskObj);
                 await interaction.editReply({ content: "✅ Your advertisement is started." });
-            } catch (e) {
+            } catch {
                 userSelfBot.destroy();
-                await interaction.editReply({ content: "❌ Error during startup. Check your configuration." });
+                await interaction.editReply({ content: "❌ Error: Check permissions or channel IDs." });
             }
         });
 
         userSelfBot.login(token).catch(async () => {
-            clearTimeout(timeout);
-            await interaction.editReply({ content: "❌ Invalid token provided." });
+            finished = true;
+            await interaction.editReply({ content: "❌ Invalid Token." });
         });
     }
 });
