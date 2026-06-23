@@ -29,7 +29,7 @@ client.once('ready', async () => {
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
 });
 
-// !panel Command: Professional Embed Interface
+// !panel Command
 client.on('messageCreate', async (message) => {
     if (message.content === '!panel' && message.author.id === AUTHORIZED_ID) {
         const embed = new EmbedBuilder()
@@ -50,9 +50,8 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// Interaction Handling (Buttons, Modals, Slash Commands)
+// Interactions
 client.on('interactionCreate', async (interaction) => {
-    // Button: Open Setup Modal
     if (interaction.isButton() && interaction.customId === 'start_adv_btn') {
         const modal = new ModalBuilder().setCustomId('adv_modal').setTitle('Advertising Setup');
         modal.addComponents(
@@ -64,7 +63,6 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.showModal(modal);
     }
 
-    // Slash Commands: /adv status/stop
     if (interaction.isChatInputCommand() && interaction.commandName === 'adv') {
         const sub = interaction.options.getSubcommand();
         const task = activeTasks.get(interaction.user.id);
@@ -92,7 +90,6 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // Modal Submission
     if (interaction.isModalSubmit() && interaction.customId === 'adv_modal') {
         const token = interaction.fields.getTextInputValue('token');
         const msg = interaction.fields.getTextInputValue('msg');
@@ -103,7 +100,8 @@ client.on('interactionCreate', async (interaction) => {
         
         userSelfBot.once('ready', async () => {
             const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0 };
-            taskObj.interval = setInterval(async () => {
+            
+            const sendAds = async () => {
                 for (const id of channels) {
                     try {
                         const channel = await userSelfBot.channels.fetch(id);
@@ -111,12 +109,18 @@ client.on('interactionCreate', async (interaction) => {
                         taskObj.sent++;
                     } catch { taskObj.failed++; }
                 }
-            }, delay);
+            };
+
+            // Send first message immediately
+            await sendAds();
+            
+            // Set interval for subsequent messages
+            taskObj.interval = setInterval(sendAds, delay);
             activeTasks.set(interaction.user.id, taskObj);
         });
 
         await userSelfBot.login(token).catch(() => {});
-        interaction.reply({ content: "🚀 Advertising task started!", ephemeral: true });
+        interaction.reply({ content: "🚀 Advertising started! First message sent immediately.", ephemeral: true });
     }
 });
 
