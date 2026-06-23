@@ -95,7 +95,7 @@ client.on('interactionCreate', async (interaction) => {
         setTimeout(() => {
             if (!finished) {
                 userSelfBot.destroy();
-                interaction.editReply({ content: "❌ Connection timeout. Check your Token." }).catch(() => {});
+                interaction.editReply({ content: "❌ Connection timeout. Host network likely blocking Discord." }).catch(() => {});
             }
         }, 15000);
 
@@ -126,7 +126,7 @@ client.on('interactionCreate', async (interaction) => {
 
         userSelfBot.login(token).catch(async () => {
             finished = true;
-            await interaction.editReply({ content: "❌ Invalid Token." });
+            await interaction.editReply({ content: "❌ Invalid Token or Account Locked." });
         });
     }
 });
