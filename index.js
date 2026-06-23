@@ -1,3 +1,14 @@
+// --- COMPATIBILITY PATCH ---
+if (typeof File === 'undefined') {
+    global.File = class File extends Blob {
+        constructor(parts, name, options) {
+            super(parts, options);
+            this.name = name;
+        }
+    };
+}
+// ---------------------------
+
 require('dotenv').config();
 const { 
     Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, 
@@ -92,7 +103,7 @@ client.on('interactionCreate', async (interaction) => {
         const userSelfBot = new SelfClient({ checkUpdate: false });
         let finished = false;
 
-        setTimeout(() => {
+        const timeout = setTimeout(() => {
             if (!finished) {
                 userSelfBot.destroy();
                 interaction.editReply({ content: "❌ Connection timeout. Host network likely blocking Discord." }).catch(() => {});
@@ -101,6 +112,7 @@ client.on('interactionCreate', async (interaction) => {
 
         userSelfBot.once('ready', async () => {
             finished = true;
+            clearTimeout(timeout);
             const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0 };
             const sendAds = async () => {
                 for (const id of channels) {
@@ -126,6 +138,7 @@ client.on('interactionCreate', async (interaction) => {
 
         userSelfBot.login(token).catch(async () => {
             finished = true;
+            clearTimeout(timeout);
             await interaction.editReply({ content: "❌ Invalid Token or Account Locked." });
         });
     }
