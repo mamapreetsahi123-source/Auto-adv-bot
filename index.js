@@ -34,15 +34,13 @@ client.on('messageCreate', async (message) => {
             .setDescription("Welcome to the advanced automated advertising suite. Use the controls below to manage your campaigns.")
             .setColor(0x5865F2)
             .addFields(
-                { name: "📋 Setup Instructions", value: "Click the **Start Advertising** button to open the configuration menu. You will need to provide your User Token, target Channel IDs, and your advertisement message.", inline: false },
-                { name: "\u200b", value: "\u200b" }, // Blank field for spacing
-                { name: "⚙️ Management Commands", value: "• `/adv status` — Check the real-time status of your active advertisements.\n• `/adv stop` — Instantly terminate all active advertising tasks.", inline: false },
-                { name: "\u200b", value: "\u200b" }, // Blank field for spacing
-                { name: "⚠️ Security Note", value: "Ensure you are using your own credentials. Keep your token private. The bot operates in private mode for your security.", inline: false }
+                { name: "📋 Setup Instructions", value: "Click the **Start Advertising** button to configure your campaign.", inline: false },
+                { name: "\u200b", value: "\u200b" },
+                { name: "⚙️ Management Commands", value: "• `/adv status` — View active campaign stats.\n• `/adv stop` — Terminate active tasks.", inline: false }
             )
-            .setFooter({ text: "Auto-Adv System | Version 1.0.0" })
+            .setFooter({ text: "Auto-Adv System | Secured" })
             .setTimestamp();
-            
+        
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('start_adv_btn').setLabel('Start Advertising').setStyle(ButtonStyle.Primary)
         );
@@ -86,41 +84,51 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.isModalSubmit() && interaction.customId === 'adv_modal') {
         await interaction.deferReply({ ephemeral: true });
+        
         const token = interaction.fields.getTextInputValue('token');
         const msg = interaction.fields.getTextInputValue('msg');
         const delay = parseInt(interaction.fields.getTextInputValue('delay')) * 1000;
         const channels = interaction.fields.getTextInputValue('channels').split(',').map(id => id.trim());
 
         const userSelfBot = new SelfClient({ checkUpdate: false });
-        
-        try {
-            await userSelfBot.login(token);
-        } catch (e) {
-            return interaction.editReply({ content: "❌ You have filled wrong token or channel id" });
-        }
 
-        userSelfBot.once('ready', async () => {
-            const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0 };
-            const sendAds = async () => {
-                for (const id of channels) {
-                    try {
-                        const channel = await userSelfBot.channels.fetch(id);
-                        if (!channel) throw new Error();
-                        await channel.send(msg);
-                        taskObj.sent++;
-                    } catch { taskObj.failed++; }
+        // Wrapping the login and task setup in a Promise to guarantee a reply
+        const startTask = new Promise(async (resolve, reject) => {
+            userSelfBot.once('ready', async () => {
+                const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0 };
+                const sendAds = async () => {
+                    for (const id of channels) {
+                        try {
+                            const channel = await userSelfBot.channels.fetch(id);
+                            if (!channel) throw new Error();
+                            await channel.send(msg);
+                            taskObj.sent++;
+                        } catch { taskObj.failed++; }
+                    }
+                };
+                try {
+                    await sendAds();
+                    taskObj.interval = setInterval(sendAds, delay);
+                    activeTasks.set(interaction.user.id, taskObj);
+                    resolve("✅ Your advertisement is started.");
+                } catch (e) {
+                    reject("❌ You have filled wrong token or channel id");
                 }
-            };
+            });
+
             try {
-                await sendAds();
-                taskObj.interval = setInterval(sendAds, delay);
-                activeTasks.set(interaction.user.id, taskObj);
-                interaction.editReply({ content: "✅ Your advertisement is started." });
+                await userSelfBot.login(token);
             } catch (e) {
-                userSelfBot.destroy();
-                interaction.editReply({ content: "❌ You have filled wrong token or channel id" });
+                reject("❌ You have filled wrong token or channel id");
             }
         });
+
+        startTask
+            .then(res => interaction.editReply({ content: res }))
+            .catch(err => {
+                userSelfBot.destroy();
+                interaction.editReply({ content: err });
+            });
     }
 });
 
