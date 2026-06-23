@@ -35,6 +35,7 @@ client.on('messageCreate', async (message) => {
             .setColor(0x5865F2)
             .addFields(
                 { name: "📋 Setup Instructions", value: "Click the **Start Advertising** button to configure your campaign.", inline: false },
+                { name: "\u200b", value: "\u200b" },
                 { name: "⚙️ Management Commands", value: "• `/adv status` — View active campaign stats.\n• `/adv stop` — Terminate active tasks.", inline: false }
             )
             .setFooter({ text: "Auto-Adv System | Secured" })
@@ -48,19 +49,17 @@ client.on('messageCreate', async (message) => {
 });
 
 client.on('interactionCreate', async (interaction) => {
-    // 1. Show Modal immediately
     if (interaction.isButton() && interaction.customId === 'start_adv_btn') {
         const modal = new ModalBuilder().setCustomId('adv_modal').setTitle('Advertising Setup');
         modal.addComponents(
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('msg').setLabel('Message').setStyle(TextInputStyle.Paragraph).setRequired(true)),
-            new ActionRowBuilder().setComponents(new TextInputBuilder().setCustomId('delay').setLabel('Delay (seconds)').setValue('60').setStyle(TextInputStyle.Short).setRequired(true)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('delay').setLabel('Delay (seconds)').setValue('60').setStyle(TextInputStyle.Short).setRequired(true)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channels').setLabel('Channel IDs (comma separated)').setStyle(TextInputStyle.Paragraph).setRequired(true))
         );
         return interaction.showModal(modal);
     }
 
-    // 2. Handle slash commands
     if (interaction.isChatInputCommand() && interaction.commandName === 'adv') {
         const sub = interaction.options.getSubcommand();
         const task = activeTasks.get(interaction.user.id);
@@ -83,9 +82,8 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // 3. Handle Modal submission with deferReply
     if (interaction.isModalSubmit() && interaction.customId === 'adv_modal') {
-        // Acknowledge IMMEDIATELY to prevent "thinking..."
+        // 1. MUST DEFER IMMEDIATELY
         await interaction.deferReply({ ephemeral: true });
         
         const token = interaction.fields.getTextInputValue('token');
@@ -95,39 +93,42 @@ client.on('interactionCreate', async (interaction) => {
 
         const userSelfBot = new SelfClient({ checkUpdate: false });
 
-        // Logic handled in a clean Promise chain
-        const runTask = new Promise((resolve, reject) => {
-            userSelfBot.once('ready', async () => {
-                const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0 };
-                const sendAds = async () => {
-                    for (const id of channels) {
-                        try {
-                            const channel = await userSelfBot.channels.fetch(id);
-                            if (channel) {
-                                await channel.send(msg);
-                                taskObj.sent++;
-                            }
-                        } catch { taskObj.failed++; }
-                    }
-                };
+        // 2. Use a timeout to prevent infinite "thinking"
+        const timeout = setTimeout(() => {
+            userSelfBot.destroy();
+            interaction.editReply({ content: "❌ Connection timed out. Please check your token or channel IDs." }).catch(() => {});
+        }, 15000);
 
-                try {
-                    await sendAds();
-                    taskObj.interval = setInterval(sendAds, delay);
-                    activeTasks.set(interaction.user.id, taskObj);
-                    resolve();
-                } catch { reject(); }
-            });
+        userSelfBot.once('ready', async () => {
+            clearTimeout(timeout);
+            const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0 };
+            const sendAds = async () => {
+                for (const id of channels) {
+                    try {
+                        const channel = await userSelfBot.channels.fetch(id);
+                        if (channel) {
+                            await channel.send(msg);
+                            taskObj.sent++;
+                        }
+                    } catch { taskObj.failed++; }
+                }
+            };
 
-            userSelfBot.login(token).catch(() => reject());
+            try {
+                await sendAds();
+                taskObj.interval = setInterval(sendAds, delay);
+                activeTasks.set(interaction.user.id, taskObj);
+                await interaction.editReply({ content: "✅ Your advertisement is started." });
+            } catch (e) {
+                userSelfBot.destroy();
+                await interaction.editReply({ content: "❌ Error during startup. Check your configuration." });
+            }
         });
 
-        runTask
-            .then(() => interaction.editReply({ content: "✅ Your advertisement is started." }))
-            .catch(() => {
-                userSelfBot.destroy();
-                interaction.editReply({ content: "❌ Error: Could not start. Check your Token/Channel IDs." });
-            });
+        userSelfBot.login(token).catch(async () => {
+            clearTimeout(timeout);
+            await interaction.editReply({ content: "❌ Invalid token provided." });
+        });
     }
 });
 
