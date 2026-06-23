@@ -1,31 +1,39 @@
-require('dotenv').config(); // Ensure you have a .env file with DISCORD_TOKEN
+require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+// Added MessageContent intent to listen for "!panel"
+const client = new Client({ 
+    intents: [
+        GatewayIntentBits.Guilds, 
+        GatewayIntentBits.GuildMessages, 
+        GatewayIntentBits.MessageContent 
+    ] 
+});
+
 const activeTasks = new Map();
 const AUTHORIZED_ID = '1277163202614001706';
 
 client.on('ready', () => console.log(`Bot logged as ${client.user.tag}`));
 
-client.on('interactionCreate', async (interaction) => {
-    // Panel Command
-    if (interaction.isChatInputCommand() && interaction.commandName === 'panel') {
-        if (interaction.user.id !== AUTHORIZED_ID) return interaction.reply({ content: "Unauthorized.", ephemeral: true });
-        
+// 1. Listen for !panel command
+client.on('messageCreate', async (message) => {
+    if (message.content === '!panel' && message.author.id === AUTHORIZED_ID) {
         const embed = new EmbedBuilder()
             .setTitle("🚀 Advertising Control Panel")
-            .setDescription("Click the button below to configure and start your advertising.")
+            .setDescription("Click the button below to start advertising.")
             .setColor(0x0099ff);
         
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('start_adv_btn').setLabel('Start Advertising').setStyle(ButtonStyle.Primary)
         );
 
-        return interaction.reply({ embeds: [embed], components: [row] });
+        return message.channel.send({ embeds: [embed], components: [row] });
     }
+});
 
-    // Modal Trigger
+// 2. Button and Modal Handling (Interaction-based)
+client.on('interactionCreate', async (interaction) => {
     if (interaction.isButton() && interaction.customId === 'start_adv_btn') {
         const modal = new ModalBuilder().setCustomId('adv_modal').setTitle('Advertising Setup');
         modal.addComponents(
@@ -37,13 +45,14 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.showModal(modal);
     }
 
-    // Adv Subcommands
+    // 3. /adv Subcommands (Status/Stop)
+    // NOTE: Keep these as slash commands if you prefer, or change to message commands
     if (interaction.isChatInputCommand() && interaction.commandName === 'adv') {
         const sub = interaction.options.getSubcommand();
         const task = activeTasks.get(interaction.user.id);
 
         if (sub === 'status') {
-            if (!task) return interaction.reply({ content: "No task is currently running.", ephemeral: true });
+            if (!task) return interaction.reply({ content: "No task is running.", ephemeral: true });
             return interaction.reply({ 
                 content: `### 📊 Advertising Status\n**State:** ${task.running ? 'Running ✅' : 'Stopped 🛑'}\n**Messages Sent:** ${task.sent}\n**Failed Attempts:** ${task.failed}`, 
                 ephemeral: true 
@@ -51,7 +60,7 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (sub === 'stop') {
-            if (!task) return interaction.reply({ content: "No task is active to stop.", ephemeral: true });
+            if (!task) return interaction.reply({ content: "No task to stop.", ephemeral: true });
             clearInterval(task.interval);
             task.client.destroy();
             activeTasks.delete(interaction.user.id);
@@ -59,7 +68,6 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    // Modal Handling
     if (interaction.isModalSubmit() && interaction.customId === 'adv_modal') {
         const token = interaction.fields.getTextInputValue('token');
         const msg = interaction.fields.getTextInputValue('msg');
@@ -70,7 +78,6 @@ client.on('interactionCreate', async (interaction) => {
         
         userSelfBot.once('ready', async () => {
             const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0 };
-            
             const taskLoop = setInterval(async () => {
                 for (const id of channels) {
                     try {
@@ -80,16 +87,12 @@ client.on('interactionCreate', async (interaction) => {
                     } catch { taskObj.failed++; }
                 }
             }, delay);
-            
             taskObj.interval = taskLoop;
             activeTasks.set(interaction.user.id, taskObj);
         });
 
-        await userSelfBot.login(token).catch(err => {
-            return interaction.reply({ content: "❌ Failed to login: Invalid Token", ephemeral: true });
-        });
-        
-        interaction.reply({ content: "✅ Advertising task started successfully!", ephemeral: true });
+        await userSelfBot.login(token).catch(() => {});
+        interaction.reply({ content: "✅ Advertising task started!", ephemeral: true });
     }
 });
 
