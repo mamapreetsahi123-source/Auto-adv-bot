@@ -1,5 +1,9 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, REST, Routes } = require('discord.js');
+const { 
+    Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, 
+    ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, 
+    TextInputStyle, REST, Routes 
+} = require('discord.js');
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
 
 const client = new Client({ 
@@ -12,10 +16,7 @@ const AUTHORIZED_ID = '1277163202614001706';
 client.once('ready', async () => {
     console.log(`Bot logged as ${client.user.tag}`);
     
-    // WIPE OLD COMMANDS: Run this once then you can remove this block
-    // await client.application.commands.set([]); 
-    
-    // REGISTER ONLY THE /adv COMMAND
+    // Register /adv commands
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     const commands = [{
         name: 'adv',
@@ -28,13 +29,19 @@ client.once('ready', async () => {
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
 });
 
-// !panel Command
+// !panel Command: Professional Embed Interface
 client.on('messageCreate', async (message) => {
     if (message.content === '!panel' && message.author.id === AUTHORIZED_ID) {
         const embed = new EmbedBuilder()
             .setTitle("🚀 Advertising Control Panel")
-            .setDescription("Click the button below to start advertising.")
-            .setColor(0x0099ff);
+            .setDescription("Manage your automated advertising campaigns securely.")
+            .setColor(0x5865F2)
+            .addFields(
+                { name: "📋 Instructions", value: "Click the **Start Advertising** button below to configure your message, delay, and target channels.", inline: false },
+                { name: "⚙️ Available Commands", value: "• `/adv status` — View active campaign stats\n• `/adv stop` — Halt current operations", inline: false }
+            )
+            .setFooter({ text: "Auto-Adv System | Secured" })
+            .setTimestamp();
         
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('start_adv_btn').setLabel('Start Advertising').setStyle(ButtonStyle.Primary)
@@ -43,9 +50,9 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// Interactions (Buttons, Modals, Slash Commands)
+// Interaction Handling (Buttons, Modals, Slash Commands)
 client.on('interactionCreate', async (interaction) => {
-    // Button: Open Modal
+    // Button: Open Setup Modal
     if (interaction.isButton() && interaction.customId === 'start_adv_btn') {
         const modal = new ModalBuilder().setCustomId('adv_modal').setTitle('Advertising Setup');
         modal.addComponents(
@@ -57,26 +64,35 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.showModal(modal);
     }
 
-    // Slash Commands: /adv status or /adv stop
+    // Slash Commands: /adv status/stop
     if (interaction.isChatInputCommand() && interaction.commandName === 'adv') {
         const sub = interaction.options.getSubcommand();
         const task = activeTasks.get(interaction.user.id);
 
         if (sub === 'status') {
-            if (!task) return interaction.reply({ content: "No task is running.", ephemeral: true });
-            return interaction.reply({ content: `### 📊 Status\n**State:** ${task.running ? 'Running ✅' : 'Stopped 🛑'}\n**Sent:** ${task.sent}\n**Failed:** ${task.failed}`, ephemeral: true });
+            if (!task) return interaction.reply({ content: "❌ No active advertising task found.", ephemeral: true });
+            return interaction.reply({ 
+                embeds: [new EmbedBuilder()
+                    .setTitle("📊 Campaign Status")
+                    .addFields(
+                        { name: "State", value: task.running ? "Running ✅" : "Stopped 🛑", inline: true },
+                        { name: "Sent", value: task.sent.toString(), inline: true },
+                        { name: "Failed", value: task.failed.toString(), inline: true }
+                    ).setColor(task.running ? 0x00FF00 : 0xFF0000)], 
+                ephemeral: true 
+            });
         }
 
         if (sub === 'stop') {
-            if (!task) return interaction.reply({ content: "No task to stop.", ephemeral: true });
+            if (!task) return interaction.reply({ content: "❌ No task is active to stop.", ephemeral: true });
             clearInterval(task.interval);
             task.client.destroy();
             activeTasks.delete(interaction.user.id);
-            return interaction.reply({ content: "Advertising stopped.", ephemeral: true });
+            return interaction.reply({ content: "✅ Advertising has been stopped successfully.", ephemeral: true });
         }
     }
 
-    // Modal Submit
+    // Modal Submission
     if (interaction.isModalSubmit() && interaction.customId === 'adv_modal') {
         const token = interaction.fields.getTextInputValue('token');
         const msg = interaction.fields.getTextInputValue('msg');
@@ -100,7 +116,7 @@ client.on('interactionCreate', async (interaction) => {
         });
 
         await userSelfBot.login(token).catch(() => {});
-        interaction.reply({ content: "✅ Task started!", ephemeral: true });
+        interaction.reply({ content: "🚀 Advertising task started!", ephemeral: true });
     }
 });
 
