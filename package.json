@@ -9,6 +9,7 @@
   "dependencies": {
     "discord.js": "latest",
     "discord.js-selfbot-v13": "latest",
-    "express": "latest"
+    "express": "latest",
+    "dotenv": "latest"
   }
 }
