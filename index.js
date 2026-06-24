@@ -1,4 +1,4 @@
-// --- COMPATIBILITY PATCH ---
+// --- COMPATIBILITY PATCH FOR HOSTING ---
 if (typeof File === 'undefined') {
     global.File = class File extends Blob {
         constructor(parts, name, options) {
@@ -7,7 +7,6 @@ if (typeof File === 'undefined') {
         }
     };
 }
-// ---------------------------
 
 require('dotenv').config();
 const { 
@@ -64,8 +63,8 @@ client.on('interactionCreate', async (interaction) => {
         modal.addComponents(
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('token').setLabel('User Token').setStyle(TextInputStyle.Short).setRequired(true)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('msg').setLabel('Message').setStyle(TextInputStyle.Paragraph).setRequired(true)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('delay').setLabel('Delay (seconds)').setValue('60').setStyle(TextInputStyle.Short).setRequired(true)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channels').setLabel('Channel IDs (comma separated)').setStyle(TextInputStyle.Paragraph).setRequired(true))
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('delay').setLabel('Delay (seconds, min 60)').setValue('60').setStyle(TextInputStyle.Short).setRequired(true)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('channels').setLabel('Channel IDs (max 3, comma separated)').setStyle(TextInputStyle.Paragraph).setRequired(true))
         );
         return interaction.showModal(modal);
     }
@@ -75,13 +74,11 @@ client.on('interactionCreate', async (interaction) => {
         const task = activeTasks.get(interaction.user.id);
         if (sub === 'status') {
             if (!task) return interaction.reply({ content: "❌ No active task.", ephemeral: true });
-            return interaction.reply({ 
-                embeds: [new EmbedBuilder().setTitle("📊 Status").addFields(
-                    { name: "State", value: task.running ? "Running ✅" : "Stopped 🛑", inline: true },
-                    { name: "Sent", value: task.sent.toString(), inline: true },
-                    { name: "Failed", value: task.failed.toString(), inline: true }
-                ).setColor(task.running ? 0x00FF00 : 0xFF0000)], ephemeral: true 
-            });
+            return interaction.reply({ embeds: [new EmbedBuilder().setTitle("📊 Status").addFields(
+                { name: "State", value: task.running ? "Running ✅" : "Stopped 🛑", inline: true },
+                { name: "Sent", value: task.sent.toString(), inline: true },
+                { name: "Failed", value: task.failed.toString(), inline: true }
+            ).setColor(task.running ? 0x00FF00 : 0xFF0000)], ephemeral: true });
         }
         if (sub === 'stop') {
             if (!task) return interaction.reply({ content: "❌ No task active.", ephemeral: true });
@@ -93,20 +90,23 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.isModalSubmit() && interaction.customId === 'adv_modal') {
-        await interaction.reply({ content: "🚀 Processing your request...", ephemeral: true });
-        
         const token = interaction.fields.getTextInputValue('token');
         const msg = interaction.fields.getTextInputValue('msg');
-        const delay = parseInt(interaction.fields.getTextInputValue('delay')) * 1000;
-        const channels = interaction.fields.getTextInputValue('channels').split(',').map(id => id.trim());
+        const delay = parseInt(interaction.fields.getTextInputValue('delay'));
+        const channels = interaction.fields.getTextInputValue('channels').split(',').map(id => id.trim()).filter(id => id);
 
+        if (delay < 60) return interaction.reply({ content: "❌ Error: Delay must be at least 60 seconds.", ephemeral: true });
+        if (channels.length > 3) return interaction.reply({ content: "❌ Error: Maximum 3 channels allowed.", ephemeral: true });
+
+        await interaction.reply({ content: "🚀 Processing request...", ephemeral: true });
+        
         const userSelfBot = new SelfClient({ checkUpdate: false });
         let finished = false;
 
         const timeout = setTimeout(() => {
             if (!finished) {
                 userSelfBot.destroy();
-                interaction.editReply({ content: "❌ Connection timeout. Host network likely blocking Discord." }).catch(() => {});
+                interaction.editReply({ content: "❌ Connection timeout. Host network likely blocked." }).catch(() => {});
             }
         }, 15000);
 
@@ -114,32 +114,26 @@ client.on('interactionCreate', async (interaction) => {
             finished = true;
             clearTimeout(timeout);
             const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0 };
+            
             const sendAds = async () => {
                 for (const id of channels) {
                     try {
                         const channel = await userSelfBot.channels.fetch(id);
-                        if (channel) {
-                            await channel.send(msg);
-                            taskObj.sent++;
-                        }
+                        if (channel) { await channel.send(msg); taskObj.sent++; }
                     } catch { taskObj.failed++; }
                 }
             };
-            try {
-                await sendAds();
-                taskObj.interval = setInterval(sendAds, delay);
-                activeTasks.set(interaction.user.id, taskObj);
-                await interaction.editReply({ content: "✅ Your advertisement is started." });
-            } catch {
-                userSelfBot.destroy();
-                await interaction.editReply({ content: "❌ Error: Check permissions or channel IDs." });
-            }
+            
+            await sendAds();
+            taskObj.interval = setInterval(sendAds, delay * 1000);
+            activeTasks.set(interaction.user.id, taskObj);
+            await interaction.editReply({ content: "✅ Advertising started successfully." });
         });
 
-        userSelfBot.login(token).catch(async () => {
+        userSelfBot.login(token).catch(() => {
             finished = true;
             clearTimeout(timeout);
-            await interaction.editReply({ content: "❌ Invalid Token or Account Locked." });
+            interaction.editReply({ content: "❌ Invalid Token or Account Locked." });
         });
     }
 });
