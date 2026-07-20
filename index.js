@@ -19,21 +19,19 @@ const { Client: SelfClient } = require('discord.js-selfbot-v13');
 // --- FIXED & OPTIMIZED PRIMARY CLIENT ---
 const client = new Client({ 
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
-    // Properly limit memory using Options cache sweeping instead of breaking internal maps
     makeCache: Options.cacheWithLimits({
-        MessageManager: 0,       // Do not cache messages long term
-        GuildMemberManager: 0,   // Do not store guild members
-        PresenceManager: 0,      // Disable presence tracking
-        ReactionManager: 0,      // Disable reactions caching
-        ThreadManager: 0,        // Disable threads caching
-        UserManager: 0           // Disable deep user tracking
+        MessageManager: 0,       
+        GuildMemberManager: 0,   
+        PresenceManager: 0,      
+        ReactionManager: 0,      
+        ThreadManager: 0,        
+        UserManager: 0           
     })
 });
 
 const activeTasks = new Map();
 const AUTHORIZED_ID = '1277163202614001706';
 
-// Fixed DeprecationWarning by upgrading 'ready' to 'clientReady'
 client.once('clientReady', async () => {
     console.log(`Bot logged as ${client.user.tag}`);
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -93,12 +91,11 @@ client.on('interactionCreate', async (interaction) => {
         }
         if (sub === 'stop') {
             if (!task) return interaction.reply({ content: "❌ No task active.", ephemeral: true });
+            task.running = false;
             clearInterval(task.interval);
             task.client.destroy();
             activeTasks.delete(interaction.user.id);
-            
             if (global.gc) global.gc();
-            
             return interaction.reply({ content: "✅ Advertising terminated.", ephemeral: true });
         }
     }
@@ -114,12 +111,25 @@ client.on('interactionCreate', async (interaction) => {
 
         await interaction.reply({ content: "🚀 Processing request...", ephemeral: true });
         
-        // --- FIXED & OPTIMIZED SELFBOT CLIENT ---
+        // --- SPOOFED CLIENT TO BYPASS INSTANT BAN ---
         const userSelfBot = new SelfClient({ 
             checkUpdate: false,
             syncStatus: false,
-            patchVoice: false
-            // Note: Keep default cache strategy on selfbot-v13 to prevent loop freeze
+            patchVoice: false,
+            // Force the library to mimic a standard Google Chrome browser signature
+            ws: {
+                properties: {
+                    os: 'Windows',
+                    browser: 'Chrome',
+                    device: '',
+                    system_locale: 'en-US',
+                    browser_user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    browser_version: '120.0.0.0',
+                    os_version: '10',
+                    referrer: 'https://discord.com',
+                    referring_domain: 'discord.com'
+                }
+            }
         });
         
         let finished = false;
@@ -134,21 +144,38 @@ client.on('interactionCreate', async (interaction) => {
         userSelfBot.once('ready', async () => {
             finished = true;
             clearTimeout(timeout);
-            const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0 };
             
+            const taskObj = { client: userSelfBot, running: true, sent: 0, failed: 0, interval: null };
+            activeTasks.set(interaction.user.id, taskObj);
+
+            const sleep = ms => new Promise(res => setTimeout(res, ms));
+
             const sendAds = async () => {
-                for (const id of channels) {
+                if (!taskObj.running) return;
+
+                // Shuffle channel order to prevent structural footprint pattern matches
+                const shuffledChannels = [...channels].sort(() => Math.random() - 0.5);
+
+                for (const id of shuffledChannels) {
+                    if (!taskObj.running) break;
                     try {
                         const channel = await userSelfBot.channels.fetch(id);
                         if (channel) { 
+                            // Simulate human typing presence to satisfy network firewall checks
+                            await channel.sendTyping();
+                            await sleep(Math.floor(Math.random() * 2000) + 1500); // 1.5s - 3.5s delay
+
                             await channel.send(msg); 
                             taskObj.sent++; 
                         }
-                    } catch { 
+                    } catch (err) { 
                         taskObj.failed++; 
+                        if (err.status === 429) await sleep(20000);
                     }
+                    // Wait a few natural seconds between channels
+                    await sleep(Math.floor(Math.random() * 3000) + 3000);
                 }
-                // Safely clear out individual dynamic message tables without breaking managers
+
                 userSelfBot.channels.cache.forEach(channel => {
                     if (channel.messages) channel.messages.cache.clear();
                 });
@@ -157,7 +184,6 @@ client.on('interactionCreate', async (interaction) => {
             
             await sendAds();
             taskObj.interval = setInterval(sendAds, delay * 1000);
-            activeTasks.set(interaction.user.id, taskObj);
             await interaction.editReply({ content: "✅ Advertising started successfully." });
         });
 
