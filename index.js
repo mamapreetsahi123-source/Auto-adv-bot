@@ -12,18 +12,29 @@ require('dotenv').config();
 const { 
     Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, 
     ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, 
-    TextInputStyle, REST, Routes 
+    TextInputStyle, REST, Routes, Options 
 } = require('discord.js');
 const { Client: SelfClient } = require('discord.js-selfbot-v13');
 
+// --- FIXED & OPTIMIZED PRIMARY CLIENT ---
 const client = new Client({ 
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] 
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+    // Properly limit memory using Options cache sweeping instead of breaking internal maps
+    makeCache: Options.cacheWithLimits({
+        MessageManager: 0,       // Do not cache messages long term
+        GuildMemberManager: 0,   // Do not store guild members
+        PresenceManager: 0,      // Disable presence tracking
+        ReactionManager: 0,      // Disable reactions caching
+        ThreadManager: 0,        // Disable threads caching
+        UserManager: 0           // Disable deep user tracking
+    })
 });
 
 const activeTasks = new Map();
 const AUTHORIZED_ID = '1277163202614001706';
 
-client.once('ready', async () => {
+// Fixed DeprecationWarning by upgrading 'ready' to 'clientReady'
+client.once('clientReady', async () => {
     console.log(`Bot logged as ${client.user.tag}`);
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     const commands = [{
@@ -85,6 +96,9 @@ client.on('interactionCreate', async (interaction) => {
             clearInterval(task.interval);
             task.client.destroy();
             activeTasks.delete(interaction.user.id);
+            
+            if (global.gc) global.gc();
+            
             return interaction.reply({ content: "✅ Advertising terminated.", ephemeral: true });
         }
     }
@@ -100,7 +114,14 @@ client.on('interactionCreate', async (interaction) => {
 
         await interaction.reply({ content: "🚀 Processing request...", ephemeral: true });
         
-        const userSelfBot = new SelfClient({ checkUpdate: false });
+        // --- FIXED & OPTIMIZED SELFBOT CLIENT ---
+        const userSelfBot = new SelfClient({ 
+            checkUpdate: false,
+            syncStatus: false,
+            patchVoice: false
+            // Note: Keep default cache strategy on selfbot-v13 to prevent loop freeze
+        });
+        
         let finished = false;
 
         const timeout = setTimeout(() => {
@@ -119,9 +140,19 @@ client.on('interactionCreate', async (interaction) => {
                 for (const id of channels) {
                     try {
                         const channel = await userSelfBot.channels.fetch(id);
-                        if (channel) { await channel.send(msg); taskObj.sent++; }
-                    } catch { taskObj.failed++; }
+                        if (channel) { 
+                            await channel.send(msg); 
+                            taskObj.sent++; 
+                        }
+                    } catch { 
+                        taskObj.failed++; 
+                    }
                 }
+                // Safely clear out individual dynamic message tables without breaking managers
+                userSelfBot.channels.cache.forEach(channel => {
+                    if (channel.messages) channel.messages.cache.clear();
+                });
+                if (global.gc) global.gc();
             };
             
             await sendAds();
