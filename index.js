@@ -1,5 +1,5 @@
 const { 
-    Client, 
+    Client: BotClient, 
     GatewayIntentBits, 
     REST, 
     Routes, 
@@ -12,10 +12,13 @@ const {
     TextInputBuilder, 
     TextInputStyle 
 } = require('discord.js');
+
+const { Client: SelfbotClient } = require('discord.js-selfbot-v13');
 require('dotenv').config();
 
-// The main control panel interface requires a normal Bot Token to host the buttons/commands
-const client = new Client({
+const ALLOWED_GUILDS = ['1493598034544820284', '1402276801065123942'];
+
+const controlBot = new BotClient({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
 });
 
@@ -23,47 +26,69 @@ let advState = {
     isRunning: false,
     sentCount: 0,
     failCount: 0,
-    intervalId: null,
+    timeoutId: null,
     targetChannels: [],
     messageContent: '',
-    delaySeconds: 0,
-    userToken: null
+    minDelay: 0,
+    maxDelay: 0,
+    userToken: null,
+    activeClient: null
 };
 
-client.once('ready', async () => {
-    console.log(`Control Panel Bot logged in as ${client.user.tag}`);
+// Background RAM monitor (Wispbyte 450MB auto-restart trigger)
+setInterval(() => {
+    const memoryUsageMB = process.memoryUsage().rss / 1024 / 1024;
+    if (memoryUsageMB >= 450) {
+        console.log(`[Memory Guardian] RAM usage reached ${memoryUsageMB.toFixed(2)} MB (>= 450MB limit). Restarting process to free memory...`);
+        if (advState.activeClient) {
+            try { advState.activeClient.destroy(); } catch {}
+        }
+        process.exit(0);
+    }
+}, 30000);
+
+controlBot.once('ready', async () => {
+    console.log(`Control Panel Bot logged in as ${controlBot.user.tag}`);
 
     const commands = [
         new SlashCommandBuilder()
             .setName('panel')
-            .setDescription('Opens the professional advertising control panel'),
+            .setDescription('Opens the hybrid advertising control panel'),
         new SlashCommandBuilder()
             .setName('adv')
             .setDescription('Manage advertisement automation')
             .addSubcommand(sub => 
-                sub.setName('status').setDescription('Checks the current status of the advertisement loop')
+                sub.setName('status').setDescription('Checks current status of advertisement loop')
             )
             .addSubcommand(sub => 
-                sub.setName('stop').setDescription('Stops the active advertising automation loop')
+                sub.setName('stop').setDescription('Stops active advertising automation loop')
             )
     ];
 
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     try {
-        await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+        await rest.put(Routes.applicationCommands(controlBot.user.id), { body: commands });
         console.log('Successfully registered global slash commands.');
     } catch (error) {
         console.error('Failed to register commands:', error);
     }
 });
 
-client.on('interactionCreate', async interaction => {
+controlBot.on('interactionCreate', async interaction => {
     try {
+        // Restrict usage to specified guild IDs only
+        if (!interaction.guildId || !ALLOWED_GUILDS.includes(interaction.guildId)) {
+            if (interaction.isRepliable()) {
+                return interaction.reply({ content: '❌ This bot is not authorized to be used in this server.', ephemeral: true });
+            }
+            return;
+        }
+
         if (interaction.isChatInputCommand()) {
             if (interaction.commandName === 'panel') {
                 const embed = new EmbedBuilder()
-                    .setTitle('📢 Professional Advertising Control Center')
-                    .setDescription('Manage your automated broadcasting using direct HTTP requests.\n\n**Instructions:**\n1. Click **Start Advertising** below.\n2. Input your **User Token**, target Channel IDs, Message content, and Delay.\n3. Use `/adv status` to track delivery performance or `/adv stop` to halt.')
+                    .setTitle('📢 Hybrid Advertising Control Center')
+                    .setDescription('Manage automated broadcasting using standard messages with initial delay.\n\n**Instructions:**\n1. Click **Start Advertising** below.\n2. Input your User Token, Channel IDs, Advertisement Message, and Delay Range.\n3. Use `/adv status` or `/adv stop`.')
                     .setColor(0x5865F2)
                     .setTimestamp();
 
@@ -86,7 +111,7 @@ client.on('interactionCreate', async interaction => {
                             { name: 'Status', value: advState.isRunning ? '🟢 Running' : '🔴 Stopped', inline: true },
                             { name: 'Messages Sent', value: `${advState.sentCount}`, inline: true },
                             { name: 'Failed Attempts', value: `${advState.failCount}`, inline: true },
-                            { name: 'Configured Delay', value: `${advState.delaySeconds} seconds`, inline: false }
+                            { name: 'Delay Range', value: `${advState.minDelay}s - ${advState.maxDelay}s`, inline: false }
                         )
                         .setColor(advState.isRunning ? 0x57F287 : 0xED4245)
                         .setTimestamp();
@@ -105,7 +130,7 @@ client.on('interactionCreate', async interaction => {
         else if (interaction.isButton() && interaction.customId === 'open_adv_modal') {
             const modal = new ModalBuilder()
                 .setCustomId('adv_config_modal')
-                .setTitle('Configure User Campaign');
+                .setTitle('Configure Advertising Campaign');
 
             const tokenInput = new TextInputBuilder()
                 .setCustomId('adv_token')
@@ -125,14 +150,14 @@ client.on('interactionCreate', async interaction => {
                 .setCustomId('adv_message')
                 .setLabel('Advertisement Message')
                 .setStyle(TextInputStyle.Paragraph)
-                .setPlaceholder('Enter promotional text...')
+                .setPlaceholder('Type your advertisement message here...')
                 .setRequired(true);
 
             const delayInput = new TextInputBuilder()
                 .setCustomId('adv_delay')
-                .setLabel('Delay Between Messages (Seconds)')
+                .setLabel('Delay Range (Min-Max Seconds, e.g. 30-60)')
                 .setStyle(TextInputStyle.Short)
-                .setPlaceholder('e.g., 30')
+                .setPlaceholder('30-60')
                 .setRequired(true);
 
             modal.addComponents(
@@ -151,11 +176,23 @@ client.on('interactionCreate', async interaction => {
 
             const token = interaction.fields.getTextInputValue('adv_token').trim().replace(/^["'](.+)["']$/, '$1');
             const channelsRaw = interaction.fields.getTextInputValue('adv_channels');
-            const message = interaction.fields.getTextInputValue('adv_message');
-            const delay = parseInt(interaction.fields.getTextInputValue('adv_delay'), 10);
+            const messageContent = interaction.fields.getTextInputValue('adv_message');
+            const delayRaw = interaction.fields.getTextInputValue('adv_delay').trim();
 
-            if (isNaN(delay) || delay < 5) {
-                return interaction.reply({ content: '❌ Invalid delay. Please specify a number >= 5 seconds.', ephemeral: true });
+            let min = 30, max = 60;
+            if (delayRaw.includes('-')) {
+                const parts = delayRaw.split('-').map(p => parseInt(p.trim(), 10));
+                if (!isNaN(parts[0]) && !isNaN(parts[1])) {
+                    min = parts[0];
+                    max = parts[1];
+                }
+            } else {
+                const val = parseInt(delayRaw, 10);
+                if (!isNaN(val)) min = max = val;
+            }
+
+            if (min < 15 || max < min) {
+                return interaction.reply({ content: '❌ Invalid delay range. Minimum must be at least 15 seconds.', ephemeral: true });
             }
 
             const channels = channelsRaw.split(',').map(id => id.trim()).filter(id => id.length > 0);
@@ -165,59 +202,65 @@ client.on('interactionCreate', async interaction => {
 
             await interaction.deferReply({ ephemeral: true });
 
-            // Validate user token immediately via a lightweight HTTP GET request to /users/@me
-            const testRes = await fetch('https://discord.com/api/v10/users/@me', {
-                headers: { 'Authorization': token }
-            });
+            const userClient = new SelfbotClient({ checkUpdate: false });
 
-            if (!testRes.ok) {
-                return interaction.editReply({ content: `❌ **Token Authentication Failed:** Discord HTTP API rejected the user token (Status code: ${testRes.status}). Double check your token string.` });
-            }
+            userClient.once('ready', async () => {
+                advState.isRunning = true;
+                advState.sentCount = 0;
+                advState.failCount = 0;
+                advState.targetChannels = channels;
+                advState.messageContent = messageContent;
+                advState.minDelay = min;
+                advState.maxDelay = max;
+                advState.userToken = token;
+                advState.activeClient = userClient;
 
-            const userData = await testRes.json();
+                const initialDelaySecs = Math.floor(Math.random() * (max - min + 1)) + min;
 
-            advState.isRunning = true;
-            advState.sentCount = 0;
-            advState.failCount = 0;
-            advState.targetChannels = channels;
-            advState.messageContent = message;
-            advState.delaySeconds = delay;
-            advState.userToken = token;
+                await interaction.editReply({ 
+                    content: `✅ **Campaign Initialized!**\nUser: **${userClient.user.tag}**\nTargeting **${channels.length} channel(s)**.\n⏳ First broadcast scheduled after an initial delay of **${initialDelaySecs} seconds**.` 
+                });
 
-            await interaction.editReply({ 
-                content: `✅ **Advertising Loop Started Successfully!**\nAuthenticated User: **${userData.username}**\nTargeting **${channels.length} channel(s)** every **${delay}s** via direct API.` 
-            });
+                const runLoop = async () => {
+                    if (!advState.isRunning) return;
 
-            // Start loop using direct HTTP POST requests (skips gateway websocket client checks entirely)
-            advState.intervalId = setInterval(async () => {
-                if (!advState.isRunning) return;
+                    for (const channelId of advState.targetChannels) {
+                        if (!advState.isRunning) break;
+                        try {
+                            const channel = await userClient.channels.fetch(channelId).catch(() => null);
+                            if (!channel) {
+                                advState.failCount++;
+                                continue;
+                            }
 
-                for (const channelId of advState.targetChannels) {
-                    if (!advState.isRunning) break;
-                    try {
-                        const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-                            method: 'POST',
-                            headers: {
-                                'Authorization': advState.userToken,
-                                'Content-Type': 'application/json'
-                            },
-                            body: JSON.stringify({ content: advState.messageContent })
-                        });
+                            const typingDuration = Math.min(Math.max(advState.messageContent.length * 80, 2000), 7000);
 
-                        if (res.ok) {
+                            await channel.sendTyping().catch(() => {});
+                            await new Promise(resolve => setTimeout(resolve, typingDuration));
+
+                            await channel.send(advState.messageContent);
                             advState.sentCount++;
-                        } else {
+                        } catch (err) {
                             advState.failCount++;
+                            console.error(`Execution error on channel ${channelId}:`, err.message);
                         }
-                    } catch (err) {
-                        advState.failCount++;
-                        console.error(`HTTP Request failed for channel ${channelId}:`, err.message);
+
+                        await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 3000) + 2000));
                     }
-                    
-                    // Buffer to manage rate limits safely
-                    await new Promise(resolve => setTimeout(resolve, 1500));
-                }
-            }, delay * 1000);
+
+                    if (advState.isRunning) {
+                        const randomDelaySecs = Math.floor(Math.random() * (advState.maxDelay - advState.minDelay + 1)) + advState.minDelay;
+                        advState.timeoutId = setTimeout(runLoop, randomDelaySecs * 1000);
+                    }
+                };
+
+                // Respect initial delay before running the first cycle
+                advState.timeoutId = setTimeout(runLoop, initialDelaySecs * 1000);
+            });
+
+            userClient.login(token).catch(async (err) => {
+                await interaction.editReply({ content: `❌ **Token Login Failed:** Could not authenticate user token via gateway (${err.message}).` }).catch(() => {});
+            });
         }
     } catch (error) {
         console.error('Interaction error:', error);
@@ -229,11 +272,17 @@ client.on('interactionCreate', async interaction => {
 
 function stopAutomation() {
     advState.isRunning = false;
-    if (advState.intervalId) {
-        clearInterval(advState.intervalId);
-        advState.intervalId = null;
+    if (advState.timeoutId) {
+        clearTimeout(advState.timeoutId);
+        advState.timeoutId = null;
+    }
+    if (advState.activeClient) {
+        try {
+            advState.activeClient.destroy();
+        } catch {}
+        advState.activeClient = null;
     }
     advState.userToken = null;
 }
 
-client.login(process.env.DISCORD_TOKEN);
+controlBot.login(process.env.DISCORD_TOKEN);
