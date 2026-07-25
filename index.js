@@ -15,8 +15,11 @@ const {
 
 const { Client: SelfbotClient } = require('discord.js-selfbot-v13');
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 
 const ALLOWED_GUILDS = ['1493598034544820284', '1402276801065123942'];
+const CONFIG_FILE = path.join(__dirname, 'campaign_config.json');
 
 const controlBot = new BotClient({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
@@ -34,6 +37,28 @@ let advState = {
     userToken: null,
     activeClient: null
 };
+
+// Helper to save configuration to disk
+function saveCampaignConfig(config) {
+    try {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+    } catch (err) {
+        console.error('Failed to save campaign config:', err);
+    }
+}
+
+// Helper to load configuration from disk
+function loadCampaignConfig() {
+    try {
+        if (fs.existsSync(CONFIG_FILE)) {
+            const data = fs.readFileSync(CONFIG_FILE, 'utf8');
+            return JSON.parse(data);
+        }
+    } catch (err) {
+        console.error('Failed to load campaign config:', err);
+    }
+    return null;
+}
 
 // Background RAM monitor (Wispbyte 450MB auto-restart trigger)
 setInterval(() => {
@@ -72,11 +97,77 @@ controlBot.once('ready', async () => {
     } catch (error) {
         console.error('Failed to register commands:', error);
     }
+
+    // Auto-resume saved campaign if it was running before restart
+    const savedConfig = loadCampaignConfig();
+    if (savedConfig && savedConfig.isRunning && savedConfig.userToken) {
+        console.log('[Auto-Resume] Found saved campaign configuration. Restoring session...');
+        
+        advState.targetChannels = savedConfig.targetChannels;
+        advState.messageContent = savedConfig.messageContent;
+        advState.minDelay = savedConfig.minDelay;
+        advState.maxDelay = savedConfig.maxDelay;
+        advState.userToken = savedConfig.userToken;
+
+        const userClient = new SelfbotClient({ checkUpdate: false });
+
+        userClient.once('ready', async () => {
+            advState.isRunning = true;
+            advState.sentCount = savedConfig.sentCount || 0;
+            advState.failCount = savedConfig.failCount || 0;
+            advState.activeClient = userClient;
+
+            console.log(`[Auto-Resume] Successfully re-logged in as ${userClient.user.tag}. Resuming loops...`);
+
+            const initialDelaySecs = Math.floor(Math.random() * (advState.maxDelay - advState.minDelay + 1)) + advState.minDelay;
+
+            const runLoop = async () => {
+                if (!advState.isRunning) return;
+
+                for (const channelId of advState.targetChannels) {
+                    if (!advState.isRunning) break;
+                    try {
+                        const channel = await userClient.channels.fetch(channelId).catch(() => null);
+                        if (!channel) {
+                            advState.failCount++;
+                            continue;
+                        }
+
+                        const typingDuration = Math.min(Math.max(advState.messageContent.length * 80, 2000), 7000);
+
+                        await channel.sendTyping().catch(() => {});
+                        await new Promise(resolve => setTimeout(resolve, typingDuration));
+
+                        await channel.send(advState.messageContent);
+                        advState.sentCount++;
+                        
+                        // Update disk stats tracker
+                        saveCampaignConfig({ ...savedConfig, sentCount: advState.sentCount, failCount: advState.failCount });
+                    } catch (err) {
+                        advState.failCount++;
+                        console.error(`Execution error on channel ${channelId}:`, err.message);
+                    }
+
+                    await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 3000) + 2000));
+                }
+
+                if (advState.isRunning) {
+                    const randomDelaySecs = Math.floor(Math.random() * (advState.maxDelay - advState.minDelay + 1)) + advState.minDelay;
+                    advState.timeoutId = setTimeout(runLoop, randomDelaySecs * 1000);
+                }
+            };
+
+            advState.timeoutId = setTimeout(runLoop, initialDelaySecs * 1000);
+        });
+
+        userClient.login(savedConfig.userToken).catch((err) => {
+            console.error(`[Auto-Resume] Failed to log in saved user token: ${err.message}`);
+        });
+    }
 });
 
 controlBot.on('interactionCreate', async interaction => {
     try {
-        // Restrict usage to specified guild IDs only
         if (!interaction.guildId || !ALLOWED_GUILDS.includes(interaction.guildId)) {
             if (interaction.isRepliable()) {
                 return interaction.reply({ content: '❌ This bot is not authorized to be used in this server.', ephemeral: true });
@@ -88,7 +179,7 @@ controlBot.on('interactionCreate', async interaction => {
             if (interaction.commandName === 'panel') {
                 const embed = new EmbedBuilder()
                     .setTitle('📢 Hybrid Advertising Control Center')
-                    .setDescription('Manage automated broadcasting using standard messages with initial delay.\n\n**Instructions:**\n1. Click **Start Advertising** below.\n2. Input your User Token, Channel IDs, Advertisement Message, and Delay Range.\n3. Use `/adv status` or `/adv stop`.')
+                    .setDescription('Manage automated broadcasting using standard messages with auto-persistence.\n\n**Instructions:**\n1. Click **Start Advertising** below.\n2. Input your User Token, Channel IDs, Advertisement Message, and Delay Range.\n3. Use `/adv status` or `/adv stop`.')
                     .setColor(0x5865F2)
                     .setTimestamp();
 
@@ -215,10 +306,22 @@ controlBot.on('interactionCreate', async interaction => {
                 advState.userToken = token;
                 advState.activeClient = userClient;
 
+                // Save configuration to disk so it auto-resumes after restart/crash
+                saveCampaignConfig({
+                    isRunning: true,
+                    targetChannels: channels,
+                    messageContent: messageContent,
+                    minDelay: min,
+                    maxDelay: max,
+                    userToken: token,
+                    sentCount: 0,
+                    failCount: 0
+                });
+
                 const initialDelaySecs = Math.floor(Math.random() * (max - min + 1)) + min;
 
                 await interaction.editReply({ 
-                    content: `✅ **Campaign Initialized!**\nUser: **${userClient.user.tag}**\nTargeting **${channels.length} channel(s)**.\n⏳ First broadcast scheduled after an initial delay of **${initialDelaySecs} seconds**.` 
+                    content: `✅ **Campaign Initialized & Saved!**\nUser: **${userClient.user.tag}**\nTargeting **${channels.length} channel(s)**.\n⏳ First broadcast scheduled after an initial delay of **${initialDelaySecs} seconds**.` 
                 });
 
                 const runLoop = async () => {
@@ -240,6 +343,12 @@ controlBot.on('interactionCreate', async interaction => {
 
                             await channel.send(advState.messageContent);
                             advState.sentCount++;
+                            
+                            // Update saved metrics
+                            const currentCfg = loadCampaignConfig();
+                            if (currentCfg) {
+                                saveCampaignConfig({ ...currentCfg, sentCount: advState.sentCount, failCount: advState.failCount });
+                            }
                         } catch (err) {
                             advState.failCount++;
                             console.error(`Execution error on channel ${channelId}:`, err.message);
@@ -254,7 +363,6 @@ controlBot.on('interactionCreate', async interaction => {
                     }
                 };
 
-                // Respect initial delay before running the first cycle
                 advState.timeoutId = setTimeout(runLoop, initialDelaySecs * 1000);
             });
 
@@ -283,6 +391,11 @@ function stopAutomation() {
         advState.activeClient = null;
     }
     advState.userToken = null;
+
+    // Remove configuration file so it doesn't auto-resume a stopped campaign
+    if (fs.existsSync(CONFIG_FILE)) {
+        try { fs.unlinkSync(CONFIG_FILE); } catch {}
+    }
 }
 
 controlBot.login(process.env.DISCORD_TOKEN);
