@@ -1,15 +1,13 @@
 {
-  "name": "auto-adv-bot",
+  "name": "discord-adv-bot",
   "version": "1.0.0",
-  "description": "Automated message bot",
+  "description": "Professional advertising automation bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "latest",
-    "discord.js-selfbot-v13": "latest",
-    "express": "latest",
-    "dotenv": "latest"
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5"
   }
 }
