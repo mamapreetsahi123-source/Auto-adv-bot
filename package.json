@@ -1,13 +1,14 @@
 {
-  "name": "discord-adv-bot",
+  "name": "discord-hybrid-v13-v14",
   "version": "1.0.0",
-  "description": "Professional advertising automation bot",
+  "description": "Hybrid advertising bot using standard discord.js and discord.js-selfbot-v13",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
+    "discord.js-selfbot-v13": "^3.7.1",
     "dotenv": "^16.4.5"
   }
 }
