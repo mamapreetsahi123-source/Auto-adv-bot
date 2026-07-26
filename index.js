@@ -38,7 +38,6 @@ let advState = {
     activeClient: null
 };
 
-// Helper to save configuration to disk
 function saveCampaignConfig(config) {
     try {
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
@@ -47,7 +46,6 @@ function saveCampaignConfig(config) {
     }
 }
 
-// Helper to load configuration from disk
 function loadCampaignConfig() {
     try {
         if (fs.existsSync(CONFIG_FILE)) {
@@ -64,7 +62,7 @@ function loadCampaignConfig() {
 setInterval(() => {
     const memoryUsageMB = process.memoryUsage().rss / 1024 / 1024;
     if (memoryUsageMB >= 450) {
-        console.log(`[Memory Guardian] RAM usage reached ${memoryUsageMB.toFixed(2)} MB (>= 450MB limit). Restarting process to free memory...`);
+        console.log(`[Memory Guardian] RAM usage reached ${memoryUsageMB.toFixed(2)} MB. Restarting process...`);
         if (advState.activeClient) {
             try { advState.activeClient.destroy(); } catch {}
         }
@@ -98,10 +96,9 @@ controlBot.once('ready', async () => {
         console.error('Failed to register commands:', error);
     }
 
-    // Auto-resume saved campaign if it was running before restart
     const savedConfig = loadCampaignConfig();
     if (savedConfig && savedConfig.isRunning && savedConfig.userToken) {
-        console.log('[Auto-Resume] Found saved campaign configuration. Restoring session...');
+        console.log('[Auto-Resume] Restoring active campaign session with pre-flight stabilization...');
         
         advState.targetChannels = savedConfig.targetChannels;
         advState.messageContent = savedConfig.messageContent;
@@ -117,12 +114,21 @@ controlBot.once('ready', async () => {
             advState.failCount = savedConfig.failCount || 0;
             advState.activeClient = userClient;
 
-            console.log(`[Auto-Resume] Successfully re-logged in as ${userClient.user.tag}. Resuming loops...`);
+            console.log(`[Auto-Resume] Logged in as ${userClient.user.tag}. Stabilizing session before first send...`);
+
+            // Mandatory stabilization buffer: Let the session breathe for 10 seconds before starting loops
+            await new Promise(resolve => setTimeout(resolve, 10000));
 
             const initialDelaySecs = Math.floor(Math.random() * (advState.maxDelay - advState.minDelay + 1)) + advState.minDelay;
 
             const runLoop = async () => {
                 if (!advState.isRunning) return;
+
+                if (advState.sentCount >= 30) {
+                    console.log('[Safety Cool-down] Reached batch limit. Taking a 25-minute break...');
+                    await new Promise(resolve => setTimeout(resolve, 25 * 60 * 1000));
+                    advState.sentCount = 0;
+                }
 
                 for (const channelId of advState.targetChannels) {
                     if (!advState.isRunning) break;
@@ -133,22 +139,28 @@ controlBot.once('ready', async () => {
                             continue;
                         }
 
-                        const typingDuration = Math.min(Math.max(advState.messageContent.length * 80, 2000), 7000);
+                        // Extended human-like typing simulation to avoid instant-send triggers
+                        const typingDuration = Math.min(Math.max(advState.messageContent.length * 120, 4000), 10000);
 
                         await channel.sendTyping().catch(() => {});
                         await new Promise(resolve => setTimeout(resolve, typingDuration));
 
-                        await channel.send(advState.messageContent);
+                        const dynamicTokens = [' ', '  ', '\u200B', '\u200C', '\u200D'];
+                        const randomVariant = dynamicTokens[Math.floor(Math.random() * dynamicTokens.length)];
+                        const finalPayload = advState.messageContent + randomVariant;
+
+                        await channel.send(finalPayload);
                         advState.sentCount++;
                         
-                        // Update disk stats tracker
                         saveCampaignConfig({ ...savedConfig, sentCount: advState.sentCount, failCount: advState.failCount });
                     } catch (err) {
                         advState.failCount++;
                         console.error(`Execution error on channel ${channelId}:`, err.message);
                     }
 
-                    await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 3000) + 2000));
+                    // Pacing gap between individual channels (7 to 14 seconds)
+                    const channelBuffer = Math.floor(Math.random() * 7000) + 7000;
+                    await new Promise(resolve => setTimeout(resolve, channelBuffer));
                 }
 
                 if (advState.isRunning) {
@@ -178,8 +190,8 @@ controlBot.on('interactionCreate', async interaction => {
         if (interaction.isChatInputCommand()) {
             if (interaction.commandName === 'panel') {
                 const embed = new EmbedBuilder()
-                    .setTitle('📢 Hybrid Advertising Control Center')
-                    .setDescription('Manage automated broadcasting using standard messages with auto-persistence.\n\n**Instructions:**\n1. Click **Start Advertising** below.\n2. Input your User Token, Channel IDs, Advertisement Message, and Delay Range.\n3. Use `/adv status` or `/adv stop`.')
+                    .setTitle('📢 Protected Advertising Control Center')
+                    .setDescription('Manage automated broadcasting with session stabilization and pre-flight buffering.\n\n**Instructions:**\n1. Click **Start Advertising** below.\n2. Input your User Token, Channel IDs, Message, and Delay Range.\n3. Use `/adv status` or `/adv stop`.')
                     .setColor(0x5865F2)
                     .setTimestamp();
 
@@ -221,7 +233,7 @@ controlBot.on('interactionCreate', async interaction => {
         else if (interaction.isButton() && interaction.customId === 'open_adv_modal') {
             const modal = new ModalBuilder()
                 .setCustomId('adv_config_modal')
-                .setTitle('Configure Advertising Campaign');
+                .setTitle('Configure Protected Campaign');
 
             const tokenInput = new TextInputBuilder()
                 .setCustomId('adv_token')
@@ -246,9 +258,9 @@ controlBot.on('interactionCreate', async interaction => {
 
             const delayInput = new TextInputBuilder()
                 .setCustomId('adv_delay')
-                .setLabel('Delay Range (Min-Max Seconds, e.g. 30-60)')
+                .setLabel('Delay Range (Min-Max Seconds, e.g. 90-180)')
                 .setStyle(TextInputStyle.Short)
-                .setPlaceholder('30-60')
+                .setPlaceholder('90-180')
                 .setRequired(true);
 
             modal.addComponents(
@@ -270,7 +282,7 @@ controlBot.on('interactionCreate', async interaction => {
             const messageContent = interaction.fields.getTextInputValue('adv_message');
             const delayRaw = interaction.fields.getTextInputValue('adv_delay').trim();
 
-            let min = 30, max = 60;
+            let min = 90, max = 180;
             if (delayRaw.includes('-')) {
                 const parts = delayRaw.split('-').map(p => parseInt(p.trim(), 10));
                 if (!isNaN(parts[0]) && !isNaN(parts[1])) {
@@ -282,8 +294,8 @@ controlBot.on('interactionCreate', async interaction => {
                 if (!isNaN(val)) min = max = val;
             }
 
-            if (min < 15 || max < min) {
-                return interaction.reply({ content: '❌ Invalid delay range. Minimum must be at least 15 seconds.', ephemeral: true });
+            if (min < 60 || max < min) {
+                return interaction.reply({ content: '❌ Minimum delay must be at least 60 seconds for safety.', ephemeral: true });
             }
 
             const channels = channelsRaw.split(',').map(id => id.trim()).filter(id => id.length > 0);
@@ -306,7 +318,6 @@ controlBot.on('interactionCreate', async interaction => {
                 advState.userToken = token;
                 advState.activeClient = userClient;
 
-                // Save configuration to disk so it auto-resumes after restart/crash
                 saveCampaignConfig({
                     isRunning: true,
                     targetChannels: channels,
@@ -318,14 +329,23 @@ controlBot.on('interactionCreate', async interaction => {
                     failCount: 0
                 });
 
+                // Pre-flight stabilization buffer on fresh manual start (10 seconds)
+                await new Promise(resolve => setTimeout(resolve, 10000));
+
                 const initialDelaySecs = Math.floor(Math.random() * (max - min + 1)) + min;
 
                 await interaction.editReply({ 
-                    content: `✅ **Campaign Initialized & Saved!**\nUser: **${userClient.user.tag}**\nTargeting **${channels.length} channel(s)**.\n⏳ First broadcast scheduled after an initial delay of **${initialDelaySecs} seconds**.` 
+                    content: `🛡️ **Protected Campaign Initialized!**\nUser: **${userClient.user.tag}**\nTargeting **${channels.length} channel(s)** with session stabilization.\n⏳ First broadcast scheduled after **${initialDelaySecs} seconds**.` 
                 });
 
                 const runLoop = async () => {
                     if (!advState.isRunning) return;
+
+                    if (advState.sentCount >= 30) {
+                        console.log('[Safety Cool-down] Reached message batch limit. Taking a 25-minute break...');
+                        await new Promise(resolve => setTimeout(resolve, 25 * 60 * 1000));
+                        advState.sentCount = 0;
+                    }
 
                     for (const channelId of advState.targetChannels) {
                         if (!advState.isRunning) break;
@@ -336,15 +356,18 @@ controlBot.on('interactionCreate', async interaction => {
                                 continue;
                             }
 
-                            const typingDuration = Math.min(Math.max(advState.messageContent.length * 80, 2000), 7000);
+                            const typingDuration = Math.min(Math.max(advState.messageContent.length * 120, 4000), 10000);
 
                             await channel.sendTyping().catch(() => {});
                             await new Promise(resolve => setTimeout(resolve, typingDuration));
 
-                            await channel.send(advState.messageContent);
+                            const dynamicTokens = [' ', '  ', '\u200B', '\u200C', '\u200D'];
+                            const randomVariant = dynamicTokens[Math.floor(Math.random() * dynamicTokens.length)];
+                            const finalPayload = advState.messageContent + randomVariant;
+
+                            await channel.send(finalPayload);
                             advState.sentCount++;
                             
-                            // Update saved metrics
                             const currentCfg = loadCampaignConfig();
                             if (currentCfg) {
                                 saveCampaignConfig({ ...currentCfg, sentCount: advState.sentCount, failCount: advState.failCount });
@@ -354,7 +377,8 @@ controlBot.on('interactionCreate', async interaction => {
                             console.error(`Execution error on channel ${channelId}:`, err.message);
                         }
 
-                        await new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * 3000) + 2000));
+                        const channelBuffer = Math.floor(Math.random() * 7000) + 7000;
+                        await new Promise(resolve => setTimeout(resolve, channelBuffer));
                     }
 
                     if (advState.isRunning) {
@@ -392,7 +416,6 @@ function stopAutomation() {
     }
     advState.userToken = null;
 
-    // Remove configuration file so it doesn't auto-resume a stopped campaign
     if (fs.existsSync(CONFIG_FILE)) {
         try { fs.unlinkSync(CONFIG_FILE); } catch {}
     }
