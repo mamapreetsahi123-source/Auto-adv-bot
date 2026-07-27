@@ -14,12 +14,19 @@ const {
 } = require('discord.js');
 
 const { Client: SelfbotClient } = require('discord.js-selfbot-v13');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 
 const ALLOWED_GUILDS = ['1493598034544820284', '1402276801065123942'];
 const CONFIG_FILE = path.join(__dirname, 'campaign_config.json');
+
+// ==========================================
+// HARDCODED PROXY CONFIGURATION
+// Configured with the selected SOCKS5 proxy from your list
+// ==========================================
+const HARDCODED_PROXY = '95.163.234.50:10808'; 
 
 const controlBot = new BotClient({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
@@ -35,7 +42,8 @@ let advState = {
     minDelay: 0,
     maxDelay: 0,
     userToken: null,
-    activeClient: null
+    activeClient: null,
+    currentProxy: null
 };
 
 function saveCampaignConfig(config) {
@@ -62,7 +70,7 @@ function loadCampaignConfig() {
 setInterval(() => {
     const memoryUsageMB = process.memoryUsage().rss / 1024 / 1024;
     if (memoryUsageMB >= 450) {
-        console.log(`[Memory Guardian] RAM usage reached ${memoryUsageMB.toFixed(2)} MB. Restarting process...`);
+        console.log(`[Memory Guardian] RAM usage reached ${memoryUsageMB.toFixed(2)} MB. Restarting process safely...`);
         if (advState.activeClient) {
             try { advState.activeClient.destroy(); } catch {}
         }
@@ -98,85 +106,143 @@ controlBot.once('ready', async () => {
 
     const savedConfig = loadCampaignConfig();
     if (savedConfig && savedConfig.isRunning && savedConfig.userToken) {
-        console.log('[Auto-Resume] Restoring active campaign session with pre-flight stabilization...');
+        console.log('[Auto-Resume] Restoring active campaign session with hardcoded proxy...');
         
         advState.targetChannels = savedConfig.targetChannels;
         advState.messageContent = savedConfig.messageContent;
         advState.minDelay = savedConfig.minDelay;
         advState.maxDelay = savedConfig.maxDelay;
         advState.userToken = savedConfig.userToken;
+        advState.currentProxy = HARDCODED_PROXY || null;
 
-        const userClient = new SelfbotClient({ checkUpdate: false });
-
-        userClient.once('ready', async () => {
-            advState.isRunning = true;
-            advState.sentCount = savedConfig.sentCount || 0;
-            advState.failCount = savedConfig.failCount || 0;
-            advState.activeClient = userClient;
-
-            console.log(`[Auto-Resume] Logged in as ${userClient.user.tag}. Stabilizing session before first send...`);
-
-            // Mandatory stabilization buffer: Let the session breathe for 10 seconds before starting loops
-            await new Promise(resolve => setTimeout(resolve, 10000));
-
-            const initialDelaySecs = Math.floor(Math.random() * (advState.maxDelay - advState.minDelay + 1)) + advState.minDelay;
-
-            const runLoop = async () => {
-                if (!advState.isRunning) return;
-
-                if (advState.sentCount >= 30) {
-                    console.log('[Safety Cool-down] Reached batch limit. Taking a 25-minute break...');
-                    await new Promise(resolve => setTimeout(resolve, 25 * 60 * 1000));
-                    advState.sentCount = 0;
-                }
-
-                for (const channelId of advState.targetChannels) {
-                    if (!advState.isRunning) break;
-                    try {
-                        const channel = await userClient.channels.fetch(channelId).catch(() => null);
-                        if (!channel) {
-                            advState.failCount++;
-                            continue;
-                        }
-
-                        // Extended human-like typing simulation to avoid instant-send triggers
-                        const typingDuration = Math.min(Math.max(advState.messageContent.length * 120, 4000), 10000);
-
-                        await channel.sendTyping().catch(() => {});
-                        await new Promise(resolve => setTimeout(resolve, typingDuration));
-
-                        const dynamicTokens = [' ', '  ', '\u200B', '\u200C', '\u200D'];
-                        const randomVariant = dynamicTokens[Math.floor(Math.random() * dynamicTokens.length)];
-                        const finalPayload = advState.messageContent + randomVariant;
-
-                        await channel.send(finalPayload);
-                        advState.sentCount++;
-                        
-                        saveCampaignConfig({ ...savedConfig, sentCount: advState.sentCount, failCount: advState.failCount });
-                    } catch (err) {
-                        advState.failCount++;
-                        console.error(`Execution error on channel ${channelId}:`, err.message);
-                    }
-
-                    // Pacing gap between individual channels (7 to 14 seconds)
-                    const channelBuffer = Math.floor(Math.random() * 7000) + 7000;
-                    await new Promise(resolve => setTimeout(resolve, channelBuffer));
-                }
-
-                if (advState.isRunning) {
-                    const randomDelaySecs = Math.floor(Math.random() * (advState.maxDelay - advState.minDelay + 1)) + advState.minDelay;
-                    advState.timeoutId = setTimeout(runLoop, randomDelaySecs * 1000);
-                }
-            };
-
-            advState.timeoutId = setTimeout(runLoop, initialDelaySecs * 1000);
-        });
-
-        userClient.login(savedConfig.userToken).catch((err) => {
-            console.error(`[Auto-Resume] Failed to log in saved user token: ${err.message}`);
-        });
+        initializeAndRunSelfbot(savedConfig.userToken, advState.currentProxy, true);
     }
 });
+
+function initializeAndRunSelfbot(token, proxyString, isResume = false) {
+    if (advState.activeClient) {
+        try { advState.activeClient.destroy(); } catch {}
+        advState.activeClient = null;
+    }
+
+    let agentOptions = {};
+    if (proxyString && proxyString.trim().length > 0) {
+        let formattedProxy = proxyString.trim();
+        if (!formattedProxy.startsWith('http://') && !formattedProxy.startsWith('https://')) {
+            formattedProxy = `http://${formattedProxy}`;
+        }
+        try {
+            agentOptions.httpAgent = new HttpsProxyAgent(formattedProxy);
+            agentOptions.ws = { agent: agentOptions.httpAgent };
+            console.log(`[Proxy Engine] Routing selfbot traffic through hardcoded proxy: ${proxyString.replace(/:([^:@]+)@/, ':****@')}`);
+        } catch (e) {
+            console.error('[Proxy Error] Failed to parse proxy configuration:', e.message);
+        }
+    }
+
+    const userClient = new SelfbotClient({ 
+        checkUpdate: false,
+        restTimeOffset: 0,
+        failIfNotExists: false,
+        ...agentOptions,
+        ws: {
+            ...(agentOptions.ws || {}),
+            properties: {
+                os: 'Windows',
+                browser: 'Discord Client',
+                device: 'desktop',
+                system_locale: 'en-US',
+                browser_user_agent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Discord/1.0.9015 Chrome/108.0.5359.215 Electron/22.3.14 Safari/537.36',
+                browser_version: '1.0.9015',
+                os_version: '10.0.19045',
+                release_channel: 'stable',
+                client_build_number: 175440
+            }
+        }
+    });
+
+    userClient.once('ready', async () => {
+        advState.isRunning = true;
+        advState.activeClient = userClient;
+        if (!isResume) {
+            advState.sentCount = 0;
+            advState.failCount = 0;
+        }
+
+        console.log(`[Selfbot Engine] Successfully authenticated as ${userClient.user.tag}`);
+
+        await new Promise(resolve => setTimeout(resolve, 8000));
+
+        const initialDelaySecs = Math.floor(Math.random() * (advState.maxDelay - advState.minDelay + 1)) + advState.minDelay;
+
+        const runLoop = async () => {
+            if (!advState.isRunning || advState.activeClient !== userClient) return;
+
+            if (advState.sentCount >= 35) {
+                console.log('[Stability Cool-down] Pausing loop for 20 minutes to preserve socket health...');
+                await new Promise(resolve => setTimeout(resolve, 20 * 60 * 1000));
+                if (!advState.isRunning) return;
+                advState.sentCount = 0;
+            }
+
+            for (const channelId of advState.targetChannels) {
+                if (!advState.isRunning || advState.activeClient !== userClient) break;
+                
+                try {
+                    const channel = await userClient.channels.fetch(channelId).catch(() => null);
+                    if (!channel) {
+                        advState.failCount++;
+                        console.warn(`[Warning] Could not fetch channel ID: ${channelId}`);
+                        continue;
+                    }
+
+                    const typingDuration = Math.min(Math.max(advState.messageContent.length * 110, 3500), 9000);
+                    await channel.sendTyping().catch(() => {});
+                    await new Promise(resolve => setTimeout(resolve, typingDuration));
+
+                    const dynamicTokens = [' ', '  ', '\u200B', '\u200C', '\u200D', ' \u200B'];
+                    const randomVariant = dynamicTokens[Math.floor(Math.random() * dynamicTokens.length)];
+                    const finalPayload = advState.messageContent + randomVariant;
+
+                    await channel.send(finalPayload);
+                    advState.sentCount++;
+                    
+                    const currentCfg = loadCampaignConfig();
+                    if (currentCfg) {
+                        saveCampaignConfig({ ...currentCfg, sentCount: advState.sentCount, failCount: advState.failCount });
+                    }
+                } catch (err) {
+                    advState.failCount++;
+                    console.error(`[Execution Error] Channel ${channelId}:`, err.message);
+                    
+                    if (err.status === 429 || (err.message && err.message.toLowerCase().includes('rate limit'))) {
+                        console.warn('[Rate Limit Guard] Rate limit hit. Enforcing 60-second backoff...');
+                        await new Promise(resolve => setTimeout(resolve, 60000));
+                    }
+                }
+
+                const channelBuffer = Math.floor(Math.random() * 6000) + 6000;
+                await new Promise(resolve => setTimeout(resolve, channelBuffer));
+            }
+
+            if (advState.isRunning && advState.activeClient === userClient) {
+                const randomDelaySecs = Math.floor(Math.random() * (advState.maxDelay - advState.minDelay + 1)) + advState.minDelay;
+                advState.timeoutId = setTimeout(runLoop, randomDelaySecs * 1000);
+            }
+        };
+
+        advState.timeoutId = setTimeout(runLoop, initialDelaySecs * 1000);
+    });
+
+    userClient.on('error', (err) => {
+        console.error('[Selfbot Gateway Error]:', err.message);
+    });
+
+    userClient.login(token).catch((err) => {
+        console.error(`[Login Critical Error] Failed to authenticate user token: ${err.message}`);
+        stopAutomation();
+    });
+}
 
 controlBot.on('interactionCreate', async interaction => {
     try {
@@ -190,8 +256,8 @@ controlBot.on('interactionCreate', async interaction => {
         if (interaction.isChatInputCommand()) {
             if (interaction.commandName === 'panel') {
                 const embed = new EmbedBuilder()
-                    .setTitle('📢 Protected Advertising Control Center')
-                    .setDescription('Manage automated broadcasting with session stabilization and pre-flight buffering.\n\n**Instructions:**\n1. Click **Start Advertising** below.\n2. Input your User Token, Channel IDs, Message, and Delay Range.\n3. Use `/adv status` or `/adv stop`.')
+                    .setTitle('📢 Hardcoded Proxy Advertising Center')
+                    .setDescription('Manage automated broadcasting routing through the embedded proxy configuration.\n\n**Instructions:**\n1. Click **Start Advertising** below.\n2. Input your User Token, Channel IDs, Message, and Delay Range.')
                     .setColor(0x5865F2)
                     .setTimestamp();
 
@@ -212,6 +278,7 @@ controlBot.on('interactionCreate', async interaction => {
                         .setTitle('📊 Advertisement Status Report')
                         .addFields(
                             { name: 'Status', value: advState.isRunning ? '🟢 Running' : '🔴 Stopped', inline: true },
+                            { name: 'Active Proxy', value: advState.currentProxy ? `\`${advState.currentProxy.replace(/:([^:@]+)@/, ':****@')}\`` : 'None (Direct IP)', inline: true },
                             { name: 'Messages Sent', value: `${advState.sentCount}`, inline: true },
                             { name: 'Failed Attempts', value: `${advState.failCount}`, inline: true },
                             { name: 'Delay Range', value: `${advState.minDelay}s - ${advState.maxDelay}s`, inline: false }
@@ -233,7 +300,7 @@ controlBot.on('interactionCreate', async interaction => {
         else if (interaction.isButton() && interaction.customId === 'open_adv_modal') {
             const modal = new ModalBuilder()
                 .setCustomId('adv_config_modal')
-                .setTitle('Configure Protected Campaign');
+                .setTitle('Configure Campaign');
 
             const tokenInput = new TextInputBuilder()
                 .setCustomId('adv_token')
@@ -295,7 +362,7 @@ controlBot.on('interactionCreate', async interaction => {
             }
 
             if (min < 60 || max < min) {
-                return interaction.reply({ content: '❌ Minimum delay must be at least 60 seconds for safety.', ephemeral: true });
+                return interaction.reply({ content: '❌ Minimum delay must be at least 60 seconds.', ephemeral: true });
             }
 
             const channels = channelsRaw.split(',').map(id => id.trim()).filter(id => id.length > 0);
@@ -303,95 +370,33 @@ controlBot.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: '❌ No valid channel IDs provided.', ephemeral: true });
             }
 
+            const selectedProxy = HARDCODED_PROXY && HARDCODED_PROXY.trim().length > 0 ? HARDCODED_PROXY.trim() : null;
+
             await interaction.deferReply({ ephemeral: true });
 
-            const userClient = new SelfbotClient({ checkUpdate: false });
+            advState.targetChannels = channels;
+            advState.messageContent = messageContent;
+            advState.minDelay = min;
+            advState.maxDelay = max;
+            advState.userToken = token;
+            advState.currentProxy = selectedProxy;
 
-            userClient.once('ready', async () => {
-                advState.isRunning = true;
-                advState.sentCount = 0;
-                advState.failCount = 0;
-                advState.targetChannels = channels;
-                advState.messageContent = messageContent;
-                advState.minDelay = min;
-                advState.maxDelay = max;
-                advState.userToken = token;
-                advState.activeClient = userClient;
-
-                saveCampaignConfig({
-                    isRunning: true,
-                    targetChannels: channels,
-                    messageContent: messageContent,
-                    minDelay: min,
-                    maxDelay: max,
-                    userToken: token,
-                    sentCount: 0,
-                    failCount: 0
-                });
-
-                // Pre-flight stabilization buffer on fresh manual start (10 seconds)
-                await new Promise(resolve => setTimeout(resolve, 10000));
-
-                const initialDelaySecs = Math.floor(Math.random() * (max - min + 1)) + min;
-
-                await interaction.editReply({ 
-                    content: `🛡️ **Protected Campaign Initialized!**\nUser: **${userClient.user.tag}**\nTargeting **${channels.length} channel(s)** with session stabilization.\n⏳ First broadcast scheduled after **${initialDelaySecs} seconds**.` 
-                });
-
-                const runLoop = async () => {
-                    if (!advState.isRunning) return;
-
-                    if (advState.sentCount >= 30) {
-                        console.log('[Safety Cool-down] Reached message batch limit. Taking a 25-minute break...');
-                        await new Promise(resolve => setTimeout(resolve, 25 * 60 * 1000));
-                        advState.sentCount = 0;
-                    }
-
-                    for (const channelId of advState.targetChannels) {
-                        if (!advState.isRunning) break;
-                        try {
-                            const channel = await userClient.channels.fetch(channelId).catch(() => null);
-                            if (!channel) {
-                                advState.failCount++;
-                                continue;
-                            }
-
-                            const typingDuration = Math.min(Math.max(advState.messageContent.length * 120, 4000), 10000);
-
-                            await channel.sendTyping().catch(() => {});
-                            await new Promise(resolve => setTimeout(resolve, typingDuration));
-
-                            const dynamicTokens = [' ', '  ', '\u200B', '\u200C', '\u200D'];
-                            const randomVariant = dynamicTokens[Math.floor(Math.random() * dynamicTokens.length)];
-                            const finalPayload = advState.messageContent + randomVariant;
-
-                            await channel.send(finalPayload);
-                            advState.sentCount++;
-                            
-                            const currentCfg = loadCampaignConfig();
-                            if (currentCfg) {
-                                saveCampaignConfig({ ...currentCfg, sentCount: advState.sentCount, failCount: advState.failCount });
-                            }
-                        } catch (err) {
-                            advState.failCount++;
-                            console.error(`Execution error on channel ${channelId}:`, err.message);
-                        }
-
-                        const channelBuffer = Math.floor(Math.random() * 7000) + 7000;
-                        await new Promise(resolve => setTimeout(resolve, channelBuffer));
-                    }
-
-                    if (advState.isRunning) {
-                        const randomDelaySecs = Math.floor(Math.random() * (advState.maxDelay - advState.minDelay + 1)) + advState.minDelay;
-                        advState.timeoutId = setTimeout(runLoop, randomDelaySecs * 1000);
-                    }
-                };
-
-                advState.timeoutId = setTimeout(runLoop, initialDelaySecs * 1000);
+            saveCampaignConfig({
+                isRunning: true,
+                targetChannels: channels,
+                messageContent: messageContent,
+                minDelay: min,
+                maxDelay: max,
+                userToken: token,
+                currentProxy: selectedProxy,
+                sentCount: 0,
+                failCount: 0
             });
 
-            userClient.login(token).catch(async (err) => {
-                await interaction.editReply({ content: `❌ **Token Login Failed:** Could not authenticate user token via gateway (${err.message}).` }).catch(() => {});
+            initializeAndRunSelfbot(token, selectedProxy, false);
+
+            await interaction.editReply({ 
+                content: `🚀 **Campaign Initialized!**\nTargeting **${channels.length} channel(s)**.\nProxy Status: ${selectedProxy ? `\`Routed via Hardcoded Proxy\`` : `⚠️ No proxy configured (running direct IP)`}` 
             });
         }
     } catch (error) {
@@ -415,6 +420,7 @@ function stopAutomation() {
         advState.activeClient = null;
     }
     advState.userToken = null;
+    advState.currentProxy = null;
 
     if (fs.existsSync(CONFIG_FILE)) {
         try { fs.unlinkSync(CONFIG_FILE); } catch {}
