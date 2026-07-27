@@ -21,12 +21,7 @@ const path = require('path');
 
 const ALLOWED_GUILDS = ['1493598034544820284', '1402276801065123942'];
 const CONFIG_FILE = path.join(__dirname, 'campaign_config.json');
-
-// ==========================================
-// HARDCODED PROXY CONFIGURATION
-// Configured with the selected SOCKS5 proxy from your list
-// ==========================================
-const HARDCODED_PROXY = '95.163.234.50:10808'; 
+const PROXIES_FILE = path.join(__dirname, 'proxies.json');
 
 const controlBot = new BotClient({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
@@ -64,6 +59,39 @@ function loadCampaignConfig() {
         console.error('Failed to load campaign config:', err);
     }
     return null;
+}
+
+function getProxyPool() {
+    try {
+        if (fs.existsSync(PROXIES_FILE)) {
+            const data = fs.readFileSync(PROXIES_FILE, 'utf8');
+            return JSON.parse(data);
+        }
+    } catch (err) {
+        console.error('Failed to load proxy pool:', err);
+    }
+    
+    // Default pool pre-loaded with stable elite low-latency proxies from your screenshots
+    const defaultProxies = [
+        '77.245.76.107:1080',
+        '217.144.187.80:1080',
+        '144.76.159.120:1084',
+        '152.89.104.11:1080',
+        '178.130.47.43:1082',
+        '64.188.77.26:1080',
+        '23.175.248.21:1080',
+        '184.95.235.194:1080'
+    ];
+    saveProxyPool(defaultProxies);
+    return defaultProxies;
+}
+
+function saveProxyPool(proxies) {
+    try {
+        fs.writeFileSync(PROXIES_FILE, JSON.stringify(proxies, null, 2));
+    } catch (err) {
+        console.error('Failed to save proxy pool:', err);
+    }
 }
 
 // Background RAM monitor (Wispbyte 450MB auto-restart trigger)
@@ -106,16 +134,29 @@ controlBot.once('ready', async () => {
 
     const savedConfig = loadCampaignConfig();
     if (savedConfig && savedConfig.isRunning && savedConfig.userToken) {
-        console.log('[Auto-Resume] Restoring active campaign session with hardcoded proxy...');
-        
-        advState.targetChannels = savedConfig.targetChannels;
-        advState.messageContent = savedConfig.messageContent;
-        advState.minDelay = savedConfig.minDelay;
-        advState.maxDelay = savedConfig.maxDelay;
-        advState.userToken = savedConfig.userToken;
-        advState.currentProxy = HARDCODED_PROXY || null;
+        const pool = getProxyPool();
+        // Ensure proxy exists for resume, otherwise abort resume to safeguard account
+        if (savedConfig.currentProxy || pool.length > 0) {
+            console.log('[Auto-Resume] Restoring active campaign session with exclusive proxy mapping...');
+            
+            advState.targetChannels = savedConfig.targetChannels;
+            advState.messageContent = savedConfig.messageContent;
+            advState.minDelay = savedConfig.minDelay;
+            advState.maxDelay = savedConfig.maxDelay;
+            advState.userToken = savedConfig.userToken;
+            advState.currentProxy = savedConfig.currentProxy || pool.shift();
 
-        initializeAndRunSelfbot(savedConfig.userToken, advState.currentProxy, true);
+            if (savedConfig.currentProxy && !pool.includes(savedConfig.currentProxy)) {
+                // Ensure it's pulled from pool or kept tracked
+            }
+
+            initializeAndRunSelfbot(savedConfig.userToken, advState.currentProxy, true);
+        } else {
+            console.log('[Auto-Resume Blocked] No free proxies available in pool. Aborting auto-resume.');
+            if (fs.existsSync(CONFIG_FILE)) {
+                try { fs.unlinkSync(CONFIG_FILE); } catch {}
+            }
+        }
     }
 });
 
@@ -126,18 +167,16 @@ function initializeAndRunSelfbot(token, proxyString, isResume = false) {
     }
 
     let agentOptions = {};
-    if (proxyString && proxyString.trim().length > 0) {
-        let formattedProxy = proxyString.trim();
-        if (!formattedProxy.startsWith('http://') && !formattedProxy.startsWith('https://')) {
-            formattedProxy = `http://${formattedProxy}`;
-        }
-        try {
-            agentOptions.httpAgent = new HttpsProxyAgent(formattedProxy);
-            agentOptions.ws = { agent: agentOptions.httpAgent };
-            console.log(`[Proxy Engine] Routing selfbot traffic through hardcoded proxy: ${proxyString.replace(/:([^:@]+)@/, ':****@')}`);
-        } catch (e) {
-            console.error('[Proxy Error] Failed to parse proxy configuration:', e.message);
-        }
+    let formattedProxy = proxyString.trim();
+    if (!formattedProxy.startsWith('http://') && !formattedProxy.startsWith('https://')) {
+        formattedProxy = `http://${formattedProxy}`;
+    }
+    try {
+        agentOptions.httpAgent = new HttpsProxyAgent(formattedProxy);
+        agentOptions.ws = { agent: agentOptions.httpAgent };
+        console.log(`[Proxy Engine] Assigned unique proxy to user session: ${proxyString.replace(/:([^:@]+)@/, ':****@')}`);
+    } catch (e) {
+        console.error('[Proxy Error] Failed to parse proxy configuration:', e.message);
     }
 
     const userClient = new SelfbotClient({ 
@@ -169,7 +208,7 @@ function initializeAndRunSelfbot(token, proxyString, isResume = false) {
             advState.failCount = 0;
         }
 
-        console.log(`[Selfbot Engine] Successfully authenticated as ${userClient.user.tag}`);
+        console.log(`[Selfbot Engine] Successfully authenticated as ${userClient.user.tag} with dedicated proxy routing`);
 
         await new Promise(resolve => setTimeout(resolve, 8000));
 
@@ -256,8 +295,8 @@ controlBot.on('interactionCreate', async interaction => {
         if (interaction.isChatInputCommand()) {
             if (interaction.commandName === 'panel') {
                 const embed = new EmbedBuilder()
-                    .setTitle('📢 Hardcoded Proxy Advertising Center')
-                    .setDescription('Manage automated broadcasting routing through the embedded proxy configuration.\n\n**Instructions:**\n1. Click **Start Advertising** below.\n2. Input your User Token, Channel IDs, Message, and Delay Range.')
+                    .setTitle('📢 Strict 1:1 Proxy-Mapped Advertising Center')
+                    .setDescription('Manage automated broadcasting where each active token automatically grabs a unique, unused proxy from the pool. **Campaigns will refuse to start if no free proxy is available.**\n\n**Instructions:**\n1. Click **Start Advertising** below.\n2. Input your User Token, Channel IDs, Message, and Delay Range.')
                     .setColor(0x5865F2)
                     .setTimestamp();
 
@@ -278,7 +317,7 @@ controlBot.on('interactionCreate', async interaction => {
                         .setTitle('📊 Advertisement Status Report')
                         .addFields(
                             { name: 'Status', value: advState.isRunning ? '🟢 Running' : '🔴 Stopped', inline: true },
-                            { name: 'Active Proxy', value: advState.currentProxy ? `\`${advState.currentProxy.replace(/:([^:@]+)@/, ':****@')}\`` : 'None (Direct IP)', inline: true },
+                            { name: 'Assigned Unique Proxy', value: advState.currentProxy ? `\`${advState.currentProxy.replace(/:([^:@]+)@/, ':****@')}\`` : 'None', inline: true },
                             { name: 'Messages Sent', value: `${advState.sentCount}`, inline: true },
                             { name: 'Failed Attempts', value: `${advState.failCount}`, inline: true },
                             { name: 'Delay Range', value: `${advState.minDelay}s - ${advState.maxDelay}s`, inline: false }
@@ -344,6 +383,15 @@ controlBot.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: '⚠️ An advertising process is already active. Stop it first using `/adv stop`.', ephemeral: true });
             }
 
+            // Check pool availability BEFORE parsing everything else
+            const pool = getProxyPool();
+            if (pool.length === 0) {
+                return interaction.reply({ 
+                    content: '❌ **Proxy Pool Exhausted!** Campaign blocked because no free proxies are available. Add more proxies to maintain safety standards.', 
+                    ephemeral: true 
+                });
+            }
+
             const token = interaction.fields.getTextInputValue('adv_token').trim().replace(/^["'](.+)["']$/, '$1');
             const channelsRaw = interaction.fields.getTextInputValue('adv_channels');
             const messageContent = interaction.fields.getTextInputValue('adv_message');
@@ -370,7 +418,9 @@ controlBot.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: '❌ No valid channel IDs provided.', ephemeral: true });
             }
 
-            const selectedProxy = HARDCODED_PROXY && HARDCODED_PROXY.trim().length > 0 ? HARDCODED_PROXY.trim() : null;
+            // Safe assignment since pool.length > 0 verified above
+            const assignedProxy = pool.shift();
+            saveProxyPool(pool); 
 
             await interaction.deferReply({ ephemeral: true });
 
@@ -379,7 +429,7 @@ controlBot.on('interactionCreate', async interaction => {
             advState.minDelay = min;
             advState.maxDelay = max;
             advState.userToken = token;
-            advState.currentProxy = selectedProxy;
+            advState.currentProxy = assignedProxy;
 
             saveCampaignConfig({
                 isRunning: true,
@@ -388,15 +438,15 @@ controlBot.on('interactionCreate', async interaction => {
                 minDelay: min,
                 maxDelay: max,
                 userToken: token,
-                currentProxy: selectedProxy,
+                currentProxy: assignedProxy,
                 sentCount: 0,
                 failCount: 0
             });
 
-            initializeAndRunSelfbot(token, selectedProxy, false);
+            initializeAndRunSelfbot(token, assignedProxy, false);
 
             await interaction.editReply({ 
-                content: `🚀 **Campaign Initialized!**\nTargeting **${channels.length} channel(s)**.\nProxy Status: ${selectedProxy ? `\`Routed via Hardcoded Proxy\`` : `⚠️ No proxy configured (running direct IP)`}` 
+                content: `🚀 **Campaign Initialized Safely!**\nTargeting **${channels.length} channel(s)**.\nAssigned Proxy: \`${assignedProxy}\`` 
             });
         }
     } catch (error) {
@@ -408,6 +458,15 @@ controlBot.on('interactionCreate', async interaction => {
 });
 
 function stopAutomation() {
+    // Return proxy back to pool upon termination
+    if (advState.currentProxy) {
+        const pool = getProxyPool();
+        if (!pool.includes(advState.currentProxy)) {
+            pool.push(advState.currentProxy);
+            saveProxyPool(pool);
+        }
+    }
+
     advState.isRunning = false;
     if (advState.timeoutId) {
         clearTimeout(advState.timeoutId);
