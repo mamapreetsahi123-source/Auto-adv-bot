@@ -20,6 +20,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ALLOWED_GUILDS = ['1493598034544820284', '1402276801065123942'];
+const ADMIN_USER_ID = '1277163202614001706';
 const CONFIG_FILE = path.join(__dirname, 'campaign_config.json');
 const PROXIES_FILE = path.join(__dirname, 'proxies.json');
 
@@ -71,7 +72,6 @@ function getProxyPool() {
         console.error('Failed to load proxy pool:', err);
     }
     
-    // Default pool pre-loaded with stable elite low-latency proxies from your screenshots
     const defaultProxies = [
         '77.245.76.107:1080',
         '217.144.187.80:1080',
@@ -121,6 +121,25 @@ controlBot.once('ready', async () => {
             )
             .addSubcommand(sub => 
                 sub.setName('stop').setDescription('Stops active advertising automation loop')
+            ),
+        new SlashCommandBuilder()
+            .setName('admin_proxies')
+            .setDescription('Manage the system proxy pool (Admin Only)')
+            .addStringOption(option =>
+                option.setName('action')
+                    .setDescription('Action to execute')
+                    .setRequired(true)
+                    .addChoices(
+                        { name: 'add', value: 'add' },
+                        { name: 'remove', value: 'remove' },
+                        { name: 'list', value: 'list' },
+                        { name: 'clear', value: 'clear' }
+                    )
+            )
+            .addStringOption(option =>
+                option.setName('proxy')
+                    .setDescription('Proxy string (Required for add/remove)')
+                    .setRequired(false)
             )
     ];
 
@@ -135,7 +154,6 @@ controlBot.once('ready', async () => {
     const savedConfig = loadCampaignConfig();
     if (savedConfig && savedConfig.isRunning && savedConfig.userToken) {
         const pool = getProxyPool();
-        // Ensure proxy exists for resume, otherwise abort resume to safeguard account
         if (savedConfig.currentProxy || pool.length > 0) {
             console.log('[Auto-Resume] Restoring active campaign session with exclusive proxy mapping...');
             
@@ -145,10 +163,6 @@ controlBot.once('ready', async () => {
             advState.maxDelay = savedConfig.maxDelay;
             advState.userToken = savedConfig.userToken;
             advState.currentProxy = savedConfig.currentProxy || pool.shift();
-
-            if (savedConfig.currentProxy && !pool.includes(savedConfig.currentProxy)) {
-                // Ensure it's pulled from pool or kept tracked
-            }
 
             initializeAndRunSelfbot(savedConfig.userToken, advState.currentProxy, true);
         } else {
@@ -293,7 +307,57 @@ controlBot.on('interactionCreate', async interaction => {
         }
 
         if (interaction.isChatInputCommand()) {
-            if (interaction.commandName === 'panel') {
+            if (interaction.commandName === 'admin_proxies') {
+                if (interaction.user.id !== ADMIN_USER_ID) {
+                    return interaction.reply({ content: '❌ You do not have permission to use this administrative command.', ephemeral: true });
+                }
+
+                const action = interaction.options.getString('action');
+                const proxyInput = interaction.options.getString('proxy');
+                let pool = getProxyPool();
+
+                if (action === 'list') {
+                    const listText = pool.length > 0 ? pool.map((p, i) => `\`${i + 1}.\` ${p}`).join('\n') : 'Proxy pool is empty.';
+                    const embed = new EmbedBuilder()
+                        .setTitle('📋 Current Proxy Pool')
+                        .setDescription(listText)
+                        .setColor(0x5865F2)
+                        .setFooter({ text: `Total Available Free Proxies: ${pool.length}` })
+                        .setTimestamp();
+                    return interaction.reply({ embeds: [embed], ephemeral: true });
+                }
+
+                if (action === 'clear') {
+                    saveProxyPool([]);
+                    return interaction.reply({ content: '🧹 Proxy pool has been completely cleared.', ephemeral: true });
+                }
+
+                if (!proxyInput) {
+                    return interaction.reply({ content: '❌ You must specify a proxy value for `add` or `remove` actions.', ephemeral: true });
+                }
+
+                const cleanedProxy = proxyInput.trim();
+
+                if (action === 'add') {
+                    if (pool.includes(cleanedProxy)) {
+                        return interaction.reply({ content: `⚠️ Proxy \`${cleanedProxy}\` already exists in the pool.`, ephemeral: true });
+                    }
+                    pool.push(cleanedProxy);
+                    saveProxyPool(pool);
+                    return interaction.reply({ content: `✅ Successfully added proxy \`${cleanedProxy}\` to the pool. Total pool size: **${pool.length}**`, ephemeral: true });
+                }
+
+                if (action === 'remove') {
+                    const index = pool.indexOf(cleanedProxy);
+                    if (index === -1) {
+                        return interaction.reply({ content: `❌ Proxy \`${cleanedProxy}\` was not found in the pool.`, ephemeral: true });
+                    }
+                    pool.splice(index, 1);
+                    saveProxyPool(pool);
+                    return interaction.reply({ content: `🗑️ Successfully removed proxy \`${cleanedProxy}\` from the pool. Remaining pool size: **${pool.length}**`, ephemeral: true });
+                }
+            }
+            else if (interaction.commandName === 'panel') {
                 const embed = new EmbedBuilder()
                     .setTitle('📢 Strict 1:1 Proxy-Mapped Advertising Center')
                     .setDescription('Manage automated broadcasting where each active token automatically grabs a unique, unused proxy from the pool. **Campaigns will refuse to start if no free proxy is available.**\n\n**Instructions:**\n1. Click **Start Advertising** below.\n2. Input your User Token, Channel IDs, Message, and Delay Range.')
@@ -383,7 +447,6 @@ controlBot.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: '⚠️ An advertising process is already active. Stop it first using `/adv stop`.', ephemeral: true });
             }
 
-            // Check pool availability BEFORE parsing everything else
             const pool = getProxyPool();
             if (pool.length === 0) {
                 return interaction.reply({ 
@@ -418,7 +481,6 @@ controlBot.on('interactionCreate', async interaction => {
                 return interaction.reply({ content: '❌ No valid channel IDs provided.', ephemeral: true });
             }
 
-            // Safe assignment since pool.length > 0 verified above
             const assignedProxy = pool.shift();
             saveProxyPool(pool); 
 
@@ -458,7 +520,6 @@ controlBot.on('interactionCreate', async interaction => {
 });
 
 function stopAutomation() {
-    // Return proxy back to pool upon termination
     if (advState.currentProxy) {
         const pool = getProxyPool();
         if (!pool.includes(advState.currentProxy)) {
