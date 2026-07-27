@@ -72,15 +72,18 @@ function getProxyPool() {
         console.error('Failed to load proxy pool:', err);
     }
     
+    // Updated default proxy pool from your active list (USER:PASS@IP:PORT format)
     const defaultProxies = [
-        '77.245.76.107:1080',
-        '217.144.187.80:1080',
-        '144.76.159.120:1084',
-        '152.89.104.11:1080',
-        '178.130.47.43:1082',
-        '64.188.77.26:1080',
-        '23.175.248.21:1080',
-        '184.95.235.194:1080'
+        'vqvtbsll:delzv7dc3d6h@31.59.20.176:6754',
+        'vqvtbsll:delzv7dc3d6h@31.56.127.193:7684',
+        'vqvtbsll:delzv7dc3d6h@45.38.107.97:6014',
+        'vqvtbsll:delzv7dc3d6h@198.105.121.200:6462',
+        'vqvtbsll:delzv7dc3d6h@64.137.96.74:6641',
+        'vqvtbsll:delzv7dc3d6h@198.23.243.226:6361',
+        'vqvtbsll:delzv7dc3d6h@38.154.185.97:6370',
+        'vqvtbsll:delzv7dc3d6h@84.247.60.125:6095',
+        'vqvtbsll:delzv7dc3d6h@142.111.67.146:5611',
+        'vqvtbsll:delzv7dc3d6h@191.96.254.138:6185'
     ];
     saveProxyPool(defaultProxies);
     return defaultProxies;
@@ -108,6 +111,14 @@ setInterval(() => {
 
 controlBot.once('ready', async () => {
     console.log(`Control Panel Bot logged in as ${controlBot.user.tag}`);
+
+    // Clear saved config on startup so it never auto-resumes sessions
+    if (fs.existsSync(CONFIG_FILE)) {
+        try { 
+            fs.unlinkSync(CONFIG_FILE); 
+            console.log('[Startup] Cleared previous campaign configuration file. Fresh settings required.');
+        } catch {}
+    }
 
     const commands = [
         new SlashCommandBuilder()
@@ -149,28 +160,6 @@ controlBot.once('ready', async () => {
         console.log('Successfully registered global slash commands.');
     } catch (error) {
         console.error('Failed to register commands:', error);
-    }
-
-    const savedConfig = loadCampaignConfig();
-    if (savedConfig && savedConfig.isRunning && savedConfig.userToken) {
-        const pool = getProxyPool();
-        if (savedConfig.currentProxy || pool.length > 0) {
-            console.log('[Auto-Resume] Restoring active campaign session with exclusive proxy mapping...');
-            
-            advState.targetChannels = savedConfig.targetChannels;
-            advState.messageContent = savedConfig.messageContent;
-            advState.minDelay = savedConfig.minDelay;
-            advState.maxDelay = savedConfig.maxDelay;
-            advState.userToken = savedConfig.userToken;
-            advState.currentProxy = savedConfig.currentProxy || pool.shift();
-
-            initializeAndRunSelfbot(savedConfig.userToken, advState.currentProxy, true);
-        } else {
-            console.log('[Auto-Resume Blocked] No free proxies available in pool. Aborting auto-resume.');
-            if (fs.existsSync(CONFIG_FILE)) {
-                try { fs.unlinkSync(CONFIG_FILE); } catch {}
-            }
-        }
     }
 });
 
@@ -450,7 +439,7 @@ controlBot.on('interactionCreate', async interaction => {
             const pool = getProxyPool();
             if (pool.length === 0) {
                 return interaction.reply({ 
-                    content: '❌ **Proxy Pool Exhausted!** Campaign blocked because no free proxies are available. Add more proxies to maintain safety standards.', 
+                    content: '❌ **Proxy Pool Exhausted!** Campaign blocked because no free proxies are available. Add more proxies using `/admin_proxies`.', 
                     ephemeral: true 
                 });
             }
@@ -508,7 +497,7 @@ controlBot.on('interactionCreate', async interaction => {
             initializeAndRunSelfbot(token, assignedProxy, false);
 
             await interaction.editReply({ 
-                content: `🚀 **Campaign Initialized Safely!**\nTargeting **${channels.length} channel(s)**.\nAssigned Proxy: \`${assignedProxy}\`` 
+                content: `🚀 **Campaign Initialized Safely!**\nTargeting **${channels.length} channel(s)**.\nAssigned Proxy: \`${assignedProxy.replace(/:([^:@]+)@/, ':****@')}\`` 
             });
         }
     } catch (error) {
