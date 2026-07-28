@@ -1,4 +1,4 @@
-{
+{{
   "name": "discord-hybrid-v13-v14",
   "version": "1.0.0",
   "description": "Hybrid advertising bot using standard discord.js and discord.js-selfbot-v13",
@@ -11,6 +11,7 @@
     "discord.js": "^14.14.1",
     "discord.js-selfbot-v13": "^3.7.1",
     "dotenv": "^16.4.5",
-    "https-proxy-agent": "^5.0.1"
+    "https-proxy-agent": "^5.0.1",
+    "werift": "^0.11.8"
   }
 }
