@@ -72,8 +72,9 @@ function getProxyPool() {
         console.error('Failed to load proxy pool:', err);
     }
     
-    // Updated default proxy pool from your active list (USER:PASS@IP:PORT format)
+    // Combined pool of all 20 proxies (10 previous + 10 new)
     const defaultProxies = [
+        // Previous 10 proxies
         'vqvtbsll:delzv7dc3d6h@31.59.20.176:6754',
         'vqvtbsll:delzv7dc3d6h@31.56.127.193:7684',
         'vqvtbsll:delzv7dc3d6h@45.38.107.97:6014',
@@ -83,7 +84,18 @@ function getProxyPool() {
         'vqvtbsll:delzv7dc3d6h@38.154.185.97:6370',
         'vqvtbsll:delzv7dc3d6h@84.247.60.125:6095',
         'vqvtbsll:delzv7dc3d6h@142.111.67.146:5611',
-        'vqvtbsll:delzv7dc3d6h@191.96.254.138:6185'
+        'vqvtbsll:delzv7dc3d6h@191.96.254.138:6185',
+        // New 10 proxies
+        'jeifitnv:s1pibxrtd5hx@31.59.20.176:6754',
+        'jeifitnv:s1pibxrtd5hx@31.56.127.193:7684',
+        'jeifitnv:s1pibxrtd5hx@45.38.107.97:6014',
+        'jeifitnv:s1pibxrtd5hx@198.105.121.200:6462',
+        'jeifitnv:s1pibxrtd5hx@64.137.96.74:6641',
+        'jeifitnv:s1pibxrtd5hx@198.23.243.226:6361',
+        'jeifitnv:s1pibxrtd5hx@38.154.185.97:6370',
+        'jeifitnv:s1pibxrtd5hx@84.247.60.125:6095',
+        'jeifitnv:s1pibxrtd5hx@142.111.67.146:5611',
+        'jeifitnv:s1pibxrtd5hx@191.96.254.138:6185'
     ];
     saveProxyPool(defaultProxies);
     return defaultProxies;
@@ -97,10 +109,10 @@ function saveProxyPool(proxies) {
     }
 }
 
-// Background RAM monitor (Wispbyte 450MB auto-restart trigger)
+// Background RAM monitor updated to trigger at 950 MB
 setInterval(() => {
     const memoryUsageMB = process.memoryUsage().rss / 1024 / 1024;
-    if (memoryUsageMB >= 450) {
+    if (memoryUsageMB >= 950) {
         console.log(`[Memory Guardian] RAM usage reached ${memoryUsageMB.toFixed(2)} MB. Restarting process safely...`);
         if (advState.activeClient) {
             try { advState.activeClient.destroy(); } catch {}
@@ -306,7 +318,7 @@ controlBot.on('interactionCreate', async interaction => {
                 let pool = getProxyPool();
 
                 if (action === 'list') {
-                    const listText = pool.length > 0 ? pool.map((p, i) => `\`${i + 1}.\` ${p}`).join('\n') : 'Proxy pool is empty.';
+                    const listText = pool.length > 0 ? pool.map((p, i) => `\`${i + 1}.\` ${p.replace(/:([^:@]+)@/, ':****@')}`).join('\n') : 'Proxy pool is empty.';
                     const embed = new EmbedBuilder()
                         .setTitle('📋 Current Proxy Pool')
                         .setDescription(listText)
@@ -329,28 +341,30 @@ controlBot.on('interactionCreate', async interaction => {
 
                 if (action === 'add') {
                     if (pool.includes(cleanedProxy)) {
-                        return interaction.reply({ content: `⚠️ Proxy \`${cleanedProxy}\` already exists in the pool.`, ephemeral: true });
+                        return interaction.reply({ content: `⚠️ Proxy \`${cleanedProxy.replace(/:([^:@]+)@/, ':****@')}\` already exists in the pool.`, ephemeral: true });
                     }
                     pool.push(cleanedProxy);
                     saveProxyPool(pool);
-                    return interaction.reply({ content: `✅ Successfully added proxy \`${cleanedProxy}\` to the pool. Total pool size: **${pool.length}**`, ephemeral: true });
+                    return interaction.reply({ content: `✅ Successfully added proxy \`${cleanedProxy.replace(/:([^:@]+)@/, ':****@')}\` to the pool. Total pool size: **${pool.length}**`, ephemeral: true });
                 }
 
                 if (action === 'remove') {
                     const index = pool.indexOf(cleanedProxy);
                     if (index === -1) {
-                        return interaction.reply({ content: `❌ Proxy \`${cleanedProxy}\` was not found in the pool.`, ephemeral: true });
+                        return interaction.reply({ content: `❌ Proxy \`${cleanedProxy.replace(/:([^:@]+)@/, ':****@')}\` was not found in the pool.`, ephemeral: true });
                     }
                     pool.splice(index, 1);
                     saveProxyPool(pool);
-                    return interaction.reply({ content: `🗑️ Successfully removed proxy \`${cleanedProxy}\` from the pool. Remaining pool size: **${pool.length}**`, ephemeral: true });
+                    return interaction.reply({ content: `🗑️ Successfully removed proxy \`${cleanedProxy.replace(/:([^:@]+)@/, ':****@')}\` from the pool. Remaining pool size: **${pool.length}**`, ephemeral: true });
                 }
             }
             else if (interaction.commandName === 'panel') {
                 const embed = new EmbedBuilder()
-                    .setTitle('📢 Strict 1:1 Proxy-Mapped Advertising Center')
-                    .setDescription('Manage automated broadcasting where each active token automatically grabs a unique, unused proxy from the pool. **Campaigns will refuse to start if no free proxy is available.**\n\n**Instructions:**\n1. Click **Start Advertising** below.\n2. Input your User Token, Channel IDs, Message, and Delay Range.')
+                    .setTitle('🚀 Elite Broadcast Automation Suite')
+                    .setDescription('Welcome to the enterprise-grade automated broadcasting dashboard. Launch and manage your continuous engagement campaigns securely and efficiently.\n\n**💡 Management Commands:**\n• Use `/adv status` to check your running campaign metrics.\n• Use `/adv stop` to safely terminate an active broadcast loop.')
                     .setColor(0x5865F2)
+                    .addFields({ name: 'System Integrity', value: 'Ensure proper configurations are set to maintain continuous, uninterrupted service.', inline: false })
+                    .setFooter({ text: 'Broadcast Control Panel' })
                     .setTimestamp();
 
                 const row = new ActionRowBuilder().addComponents(
@@ -370,7 +384,6 @@ controlBot.on('interactionCreate', async interaction => {
                         .setTitle('📊 Advertisement Status Report')
                         .addFields(
                             { name: 'Status', value: advState.isRunning ? '🟢 Running' : '🔴 Stopped', inline: true },
-                            { name: 'Assigned Unique Proxy', value: advState.currentProxy ? `\`${advState.currentProxy.replace(/:([^:@]+)@/, ':****@')}\`` : 'None', inline: true },
                             { name: 'Messages Sent', value: `${advState.sentCount}`, inline: true },
                             { name: 'Failed Attempts', value: `${advState.failCount}`, inline: true },
                             { name: 'Delay Range', value: `${advState.minDelay}s - ${advState.maxDelay}s`, inline: false }
@@ -439,7 +452,7 @@ controlBot.on('interactionCreate', async interaction => {
             const pool = getProxyPool();
             if (pool.length === 0) {
                 return interaction.reply({ 
-                    content: '❌ **Proxy Pool Exhausted!** Campaign blocked because no free proxies are available. Add more proxies using `/admin_proxies`.', 
+                    content: '❌ **Resource Pool Exhausted!** Campaign blocked because no resources are available. Contact an administrator.', 
                     ephemeral: true 
                 });
             }
@@ -497,7 +510,7 @@ controlBot.on('interactionCreate', async interaction => {
             initializeAndRunSelfbot(token, assignedProxy, false);
 
             await interaction.editReply({ 
-                content: `🚀 **Campaign Initialized Safely!**\nTargeting **${channels.length} channel(s)**.\nAssigned Proxy: \`${assignedProxy.replace(/:([^:@]+)@/, ':****@')}\`` 
+                content: `🚀 **Campaign Initialized Safely!**\nTargeting **${channels.length} channel(s)**.` 
             });
         }
     } catch (error) {
