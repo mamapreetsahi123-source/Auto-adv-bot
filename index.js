@@ -21,39 +21,61 @@ const path = require('path');
 
 const ALLOWED_GUILDS = ['1493598034544820284', '1402276801065123942'];
 const ADMIN_USER_ID = '1277163202614001706';
-const CONFIG_FILE = path.join(__dirname, 'campaign_config.json');
+const ALLOWED_ROLES = ['1411527879162069022', '1512135398472548623'];
+const CONFIG_DIR = path.join(__dirname, 'user_configs');
 const PROXIES_FILE = path.join(__dirname, 'proxies.json');
+const ASSIGNED_PROXIES_FILE = path.join(__dirname, 'assigned_proxies.json');
+const RESTRICTED_FILE = path.join(__dirname, 'restricted_users.json');
+
+// Ensure user-specific configuration directory exists
+if (!fs.existsSync(CONFIG_DIR)) {
+    try { fs.mkdirSync(CONFIG_DIR, { recursive: true }); } catch {}
+}
 
 const controlBot = new BotClient({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages]
 });
 
-let advState = {
-    isRunning: false,
-    sentCount: 0,
-    failCount: 0,
-    timeoutId: null,
-    targetChannels: [],
-    messageContent: '',
-    minDelay: 0,
-    maxDelay: 0,
-    userToken: null,
-    activeClient: null,
-    currentProxy: null
-};
+// Active user sessions map (Key: tokenUserId, Value: session object)
+const activeSessions = new Map();
 
-function saveCampaignConfig(config) {
+function getRestrictedUsers() {
     try {
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+        if (fs.existsSync(RESTRICTED_FILE)) {
+            const data = fs.readFileSync(RESTRICTED_FILE, 'utf8');
+            return JSON.parse(data);
+        }
+    } catch (err) {
+        console.error('Failed to load restricted users:', err);
+    }
+    return [];
+}
+
+function saveRestrictedUsers(restrictedList) {
+    try {
+        fs.writeFileSync(RESTRICTED_FILE, JSON.stringify(restrictedList, null, 2));
+    } catch (err) {
+        console.error('Failed to save restricted users:', err);
+    }
+}
+
+function getUserConfigPath(userId) {
+    return path.join(CONFIG_DIR, `config_${userId}.json`);
+}
+
+function saveCampaignConfig(userId, config) {
+    try {
+        fs.writeFileSync(getUserConfigPath(userId), JSON.stringify(config, null, 2));
     } catch (err) {
         console.error('Failed to save campaign config:', err);
     }
 }
 
-function loadCampaignConfig() {
+function loadCampaignConfig(userId) {
     try {
-        if (fs.existsSync(CONFIG_FILE)) {
-            const data = fs.readFileSync(CONFIG_FILE, 'utf8');
+        const filePath = getUserConfigPath(userId);
+        if (fs.existsSync(filePath)) {
+            const data = fs.readFileSync(filePath, 'utf8');
             return JSON.parse(data);
         }
     } catch (err) {
@@ -72,9 +94,7 @@ function getProxyPool() {
         console.error('Failed to load proxy pool:', err);
     }
     
-    // Combined pool of all 20 proxies (10 previous + 10 new)
     const defaultProxies = [
-        // Previous 10 proxies
         'vqvtbsll:delzv7dc3d6h@31.59.20.176:6754',
         'vqvtbsll:delzv7dc3d6h@31.56.127.193:7684',
         'vqvtbsll:delzv7dc3d6h@45.38.107.97:6014',
@@ -85,7 +105,6 @@ function getProxyPool() {
         'vqvtbsll:delzv7dc3d6h@84.247.60.125:6095',
         'vqvtbsll:delzv7dc3d6h@142.111.67.146:5611',
         'vqvtbsll:delzv7dc3d6h@191.96.254.138:6185',
-        // New 10 proxies
         'jeifitnv:s1pibxrtd5hx@31.59.20.176:6754',
         'jeifitnv:s1pibxrtd5hx@31.56.127.193:7684',
         'jeifitnv:s1pibxrtd5hx@45.38.107.97:6014',
@@ -109,28 +128,162 @@ function saveProxyPool(proxies) {
     }
 }
 
-// Background RAM monitor updated to trigger at 950 MB
-setInterval(() => {
-    const memoryUsageMB = process.memoryUsage().rss / 1024 / 1024;
-    if (memoryUsageMB >= 950) {
-        console.log(`[Memory Guardian] RAM usage reached ${memoryUsageMB.toFixed(2)} MB. Restarting process safely...`);
-        if (advState.activeClient) {
-            try { advState.activeClient.destroy(); } catch {}
+function trackAssignedProxy(proxyString) {
+    try {
+        let assigned = [];
+        if (fs.existsSync(ASSIGNED_PROXIES_FILE)) {
+            assigned = JSON.parse(fs.readFileSync(ASSIGNED_PROXIES_FILE, 'utf8'));
         }
-        process.exit(0);
+        if (!assigned.includes(proxyString)) {
+            assigned.push(proxyString);
+            fs.writeFileSync(ASSIGNED_PROXIES_FILE, JSON.stringify(assigned, null, 2));
+        }
+    } catch (err) {
+        console.error('Failed to track assigned proxy:', err);
     }
-}, 30000);
+}
+
+function removeAssignedProxyTracking(proxyString) {
+    try {
+        if (fs.existsSync(ASSIGNED_PROXIES_FILE)) {
+            let assigned = JSON.parse(fs.readFileSync(ASSIGNED_PROXIES_FILE, 'utf8'));
+            assigned = assigned.filter(p => p !== proxyString);
+            fs.writeFileSync(ASSIGNED_PROXIES_FILE, JSON.stringify(assigned, null, 2));
+        }
+    } catch (err) {
+        console.error('Failed to remove assigned proxy tracking:', err);
+    }
+}
+
+// On startup, sweep any orphaned assigned proxies back into the main pool immediately (Handles hard crashes)
+function recoverOrphanedProxiesOnStartup() {
+    try {
+        if (fs.existsSync(ASSIGNED_PROXIES_FILE)) {
+            const assigned = JSON.parse(fs.readFileSync(ASSIGNED_PROXIES_FILE, 'utf8'));
+            if (assigned.length > 0) {
+                const proxyPool = getProxyPool();
+                let poolUpdated = false;
+                for (const p of assigned) {
+                    if (!proxyPool.includes(p)) {
+                        proxyPool.push(p);
+                        poolUpdated = true;
+                    }
+                }
+                if (poolUpdated) {
+                    saveProxyPool(proxyPool);
+                    console.log(`[Startup Recovery] Recovered ${assigned.length} orphaned proxy(ies) back to the pool from previous crash.`);
+                }
+                fs.writeFileSync(ASSIGNED_PROXIES_FILE, JSON.stringify([], null, 2));
+            }
+        }
+    } catch (err) {
+        console.error('Startup proxy recovery error:', err);
+    }
+}
+
+recoverOrphanedProxiesOnStartup();
+
+function returnAllActiveProxies() {
+    try {
+        const proxyPool = getProxyPool();
+        let poolUpdated = false;
+
+        for (const [tokenUserId, session] of activeSessions.entries()) {
+            if (session.currentProxy) {
+                if (!proxyPool.includes(session.currentProxy)) {
+                    proxyPool.push(session.currentProxy);
+                    poolUpdated = true;
+                }
+                removeAssignedProxyTracking(session.currentProxy);
+            }
+        }
+
+        // Also check disk assigned tracking
+        if (fs.existsSync(ASSIGNED_PROXIES_FILE)) {
+            const assigned = JSON.parse(fs.readFileSync(ASSIGNED_PROXIES_FILE, 'utf8'));
+            for (const p of assigned) {
+                if (!proxyPool.includes(p)) {
+                    proxyPool.push(p);
+                    poolUpdated = true;
+                }
+            }
+            fs.writeFileSync(ASSIGNED_PROXIES_FILE, JSON.stringify([], null, 2));
+        }
+
+        if (poolUpdated) {
+            saveProxyPool(proxyPool);
+            console.log('[Proxy Recovery] All active campaign proxies successfully returned to proxy pool.');
+        }
+    } catch (err) {
+        console.error('[Proxy Recovery Error]:', err);
+    }
+}
+
+// Safety hooks
+process.on('exit', () => {
+    returnAllActiveProxies();
+});
+
+process.on('SIGINT', () => {
+    returnAllActiveProxies();
+    process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+    returnAllActiveProxies();
+    process.exit(0);
+});
+
+process.on('uncaughtException', (err) => {
+    console.error('[Uncaught Exception]:', err);
+    returnAllActiveProxies();
+    process.exit(1);
+});
+
+async function notifyMemoryRestart(panelUserId) {
+    try {
+        const user = await controlBot.users.fetch(panelUserId).catch(() => null);
+        if (user) {
+            const embed = new EmbedBuilder()
+                .setTitle('🛡️ Bot Memory Restart / Protection')
+                .setDescription(`Hello! Your automated advertising campaign has been stopped because **the bot is restarting due to high memory usage** (to protect your account).\n\nPlease wait 2 minutes, then restart your advertisement by running the **/panel** command.`)
+                .setColor(0xFEE75C)
+                .setTimestamp();
+
+            await user.send({ embeds: [embed] }).catch(() => {});
+        }
+    } catch (err) {
+        console.error(`Failed to send memory restart stop DM to user ${panelUserId}:`, err.message);
+    }
+}
+
+setInterval(async () => {
+    const memoryUsageMB = process.memoryUsage().rss / 1024 / 1024;
+    const heapUsedMB = process.memoryUsage().heapUsed / 1024 / 1024;
+    
+    // Proactive trigger set lower (~550MB RSS) to cleanly catch it *before* V8 throws a hard OOM crash
+    if (memoryUsageMB >= 550 || heapUsedMB >= 380) {
+        console.log(`[Memory Guardian] RAM usage reached RSS: ${memoryUsageMB.toFixed(2)} MB, Heap: ${heapUsedMB.toFixed(2)} MB. Notifying users, returning assigned proxies to pool and restarting process safely...`);
+        
+        const panelUserIdsToNotify = new Set();
+        for (const [tokenUserId, session] of activeSessions.entries()) {
+            if (session.panelUserId) {
+                panelUserIdsToNotify.add(session.panelUserId);
+            }
+            if (session.activeClient) {
+                try { session.activeClient.destroy(); } catch {}
+            }
+        }
+
+        await Promise.all(Array.from(panelUserIdsToNotify).map(id => notifyMemoryRestart(id)));
+
+        returnAllActiveProxies();
+        process.exit(1);
+    }
+}, 20000);
 
 controlBot.once('ready', async () => {
     console.log(`Control Panel Bot logged in as ${controlBot.user.tag}`);
-
-    // Clear saved config on startup so it never auto-resumes sessions
-    if (fs.existsSync(CONFIG_FILE)) {
-        try { 
-            fs.unlinkSync(CONFIG_FILE); 
-            console.log('[Startup] Cleared previous campaign configuration file. Fresh settings required.');
-        } catch {}
-    }
 
     const commands = [
         new SlashCommandBuilder()
@@ -144,6 +297,29 @@ controlBot.once('ready', async () => {
             )
             .addSubcommand(sub => 
                 sub.setName('stop').setDescription('Stops active advertising automation loop')
+            ),
+        new SlashCommandBuilder()
+            .setName('admin-active-status')
+            .setDescription('Shows currently running advertising sessions (Admin Only)'),
+        new SlashCommandBuilder()
+            .setName('admin-session-command')
+            .setDescription('Manage user advertising sessions and restrictions (Admin Only)')
+            .addStringOption(option =>
+                option.setName('action')
+                    .setDescription('Action to execute')
+                    .setRequired(true)
+                    .addChoices(
+                        { name: 'stop ads', value: 'stop_ads' },
+                        { name: 'stop ads all', value: 'stop_ads_all' },
+                        { name: 'restrict', value: 'restrict' },
+                        { name: 'unrestrict', value: 'unrestrict' },
+                        { name: 'restricted users', value: 'restricted_users' }
+                    )
+            )
+            .addStringOption(option =>
+                option.setName('target_user_id')
+                    .setDescription('Token User ID or Panel User ID (Required for stop/restrict/unrestrict)')
+                    .setRequired(false)
             ),
         new SlashCommandBuilder()
             .setName('admin_proxies')
@@ -175,12 +351,41 @@ controlBot.once('ready', async () => {
     }
 });
 
-function initializeAndRunSelfbot(token, proxyString, isResume = false) {
-    if (advState.activeClient) {
-        try { advState.activeClient.destroy(); } catch {}
-        advState.activeClient = null;
-    }
+async function notifyUserStopped(panelUserId, reason) {
+    try {
+        const user = await controlBot.users.fetch(panelUserId).catch(() => null);
+        if (user) {
+            const embed = new EmbedBuilder()
+                .setTitle('⚠️ Advertising Campaign Stopped')
+                .setDescription(`Hello! Your automated advertising campaign has been stopped.\n\n**Reason:** ${reason}\n\nPlease check your control panel and verify your token or configuration before restarting your ads.`)
+                .setColor(0xED4245)
+                .setTimestamp();
 
+            await user.send({ embeds: [embed] }).catch(() => {});
+        }
+    } catch (err) {
+        console.error(`Failed to send stop DM to user ${panelUserId}:`, err.message);
+    }
+}
+
+async function notifyMaintenanceStopped(panelUserId) {
+    try {
+        const user = await controlBot.users.fetch(panelUserId).catch(() => null);
+        if (user) {
+            const embed = new EmbedBuilder()
+                .setTitle('🛠️ Bot Under Maintenance')
+                .setDescription(`Hello! Your automated advertising campaign has been forcibly stopped because **the bot has gone under maintenance**.\n\nYou can restart your ads once maintenance is complete and the bot is fixed.`)
+                .setColor(0xFEE75C)
+                .setTimestamp();
+
+            await user.send({ embeds: [embed] }).catch(() => {});
+        }
+    } catch (err) {
+        console.error(`Failed to send maintenance stop DM to user ${panelUserId}:`, err.message);
+    }
+}
+
+async function validateAndStartCampaign(panelUserId, token, proxyString, targetChannels) {
     let agentOptions = {};
     let formattedProxy = proxyString.trim();
     if (!formattedProxy.startsWith('http://') && !formattedProxy.startsWith('https://')) {
@@ -189,12 +394,11 @@ function initializeAndRunSelfbot(token, proxyString, isResume = false) {
     try {
         agentOptions.httpAgent = new HttpsProxyAgent(formattedProxy);
         agentOptions.ws = { agent: agentOptions.httpAgent };
-        console.log(`[Proxy Engine] Assigned unique proxy to user session: ${proxyString.replace(/:([^:@]+)@/, ':****@')}`);
     } catch (e) {
         console.error('[Proxy Error] Failed to parse proxy configuration:', e.message);
     }
 
-    const userClient = new SelfbotClient({ 
+    const testClient = new SelfbotClient({ 
         checkUpdate: false,
         restTimeOffset: 0,
         failIfNotExists: false,
@@ -215,87 +419,143 @@ function initializeAndRunSelfbot(token, proxyString, isResume = false) {
         }
     });
 
-    userClient.once('ready', async () => {
-        advState.isRunning = true;
-        advState.activeClient = userClient;
-        if (!isResume) {
-            advState.sentCount = 0;
-            advState.failCount = 0;
+    let timeoutReached = false;
+    const loginTimeout = setTimeout(() => {
+        timeoutReached = true;
+        try { testClient.destroy(); } catch {}
+    }, 15000);
+
+    try {
+        await testClient.login(token);
+        clearTimeout(loginTimeout);
+
+        if (timeoutReached || !testClient.user) {
+            return { success: false, error: '❌ **Invalid Token:** Failed to authenticate with the provided Discord user token. Please check your token and try again.' };
         }
 
-        console.log(`[Selfbot Engine] Successfully authenticated as ${userClient.user.tag} with dedicated proxy routing`);
+        const actualTokenUserId = testClient.user.id;
 
-        await new Promise(resolve => setTimeout(resolve, 8000));
-
-        const initialDelaySecs = Math.floor(Math.random() * (advState.maxDelay - advState.minDelay + 1)) + advState.minDelay;
-
-        const runLoop = async () => {
-            if (!advState.isRunning || advState.activeClient !== userClient) return;
-
-            if (advState.sentCount >= 35) {
-                console.log('[Stability Cool-down] Pausing loop for 20 minutes to preserve socket health...');
-                await new Promise(resolve => setTimeout(resolve, 20 * 60 * 1000));
-                if (!advState.isRunning) return;
-                advState.sentCount = 0;
+        // Validate target channels
+        for (const channelId of targetChannels) {
+            const channel = await testClient.channels.fetch(channelId).catch(() => null);
+            if (!channel) {
+                try { testClient.destroy(); } catch {}
+                return { success: false, error: `❌ **Invalid Channel ID:** Could not access channel ID \`${channelId}\`. Make sure the token has access to this channel and the ID is correct.` };
             }
+        }
 
-            for (const channelId of advState.targetChannels) {
-                if (!advState.isRunning || advState.activeClient !== userClient) break;
-                
-                try {
-                    const channel = await userClient.channels.fetch(channelId).catch(() => null);
-                    if (!channel) {
-                        advState.failCount++;
-                        console.warn(`[Warning] Could not fetch channel ID: ${channelId}`);
-                        continue;
-                    }
-
-                    const typingDuration = Math.min(Math.max(advState.messageContent.length * 110, 3500), 9000);
-                    await channel.sendTyping().catch(() => {});
-                    await new Promise(resolve => setTimeout(resolve, typingDuration));
-
-                    const dynamicTokens = [' ', '  ', '\u200B', '\u200C', '\u200D', ' \u200B'];
-                    const randomVariant = dynamicTokens[Math.floor(Math.random() * dynamicTokens.length)];
-                    const finalPayload = advState.messageContent + randomVariant;
-
-                    await channel.send(finalPayload);
-                    advState.sentCount++;
-                    
-                    const currentCfg = loadCampaignConfig();
-                    if (currentCfg) {
-                        saveCampaignConfig({ ...currentCfg, sentCount: advState.sentCount, failCount: advState.failCount });
-                    }
-                } catch (err) {
-                    advState.failCount++;
-                    console.error(`[Execution Error] Channel ${channelId}:`, err.message);
-                    
-                    if (err.status === 429 || (err.message && err.message.toLowerCase().includes('rate limit'))) {
-                        console.warn('[Rate Limit Guard] Rate limit hit. Enforcing 60-second backoff...');
-                        await new Promise(resolve => setTimeout(resolve, 60000));
-                    }
+        // Clean up previous token session if exists
+        if (activeSessions.has(actualTokenUserId)) {
+            const existing = activeSessions.get(actualTokenUserId);
+            if (existing.activeClient) {
+                try { existing.activeClient.destroy(); } catch {}
+            }
+            if (existing.currentProxy) {
+                const pool = getProxyPool();
+                if (!pool.includes(existing.currentProxy)) {
+                    pool.push(existing.currentProxy);
+                    saveProxyPool(pool);
                 }
-
-                const channelBuffer = Math.floor(Math.random() * 6000) + 6000;
-                await new Promise(resolve => setTimeout(resolve, channelBuffer));
+                removeAssignedProxyTracking(existing.currentProxy);
             }
+        }
 
-            if (advState.isRunning && advState.activeClient === userClient) {
-                const randomDelaySecs = Math.floor(Math.random() * (advState.maxDelay - advState.minDelay + 1)) + advState.minDelay;
-                advState.timeoutId = setTimeout(runLoop, randomDelaySecs * 1000);
-            }
+        const session = {
+            isRunning: true,
+            sentCount: 0,
+            failCount: 0,
+            timeoutId: null,
+            targetChannels,
+            messageContent: '',
+            minDelay: 90,
+            maxDelay: 180,
+            userToken: token,
+            activeClient: testClient,
+            currentProxy: proxyString,
+            panelUserId: panelUserId
         };
 
-        advState.timeoutId = setTimeout(runLoop, initialDelaySecs * 1000);
-    });
+        activeSessions.set(actualTokenUserId, session);
+        trackAssignedProxy(proxyString);
+
+        return { success: true, session };
+
+    } catch (err) {
+        clearTimeout(loginTimeout);
+        try { testClient.destroy(); } catch {}
+        return { success: false, error: '❌ **Invalid Token:** Authentication failed. Please provide a valid Discord user token.' };
+    }
+}
+
+function setupClientLoop(tokenUserId, session) {
+    const userClient = session.activeClient;
+    console.log(`[Selfbot Engine] Successfully authenticated as ${userClient.user.tag} with dedicated proxy routing`);
+
+    const initialDelaySecs = Math.floor(Math.random() * (session.maxDelay - session.minDelay + 1)) + session.minDelay;
+
+    const runLoop = async () => {
+        if (!session.isRunning || session.activeClient !== userClient) return;
+
+        for (const channelId of session.targetChannels) {
+            if (!session.isRunning || session.activeClient !== userClient) break;
+            
+            try {
+                const channel = await userClient.channels.fetch(channelId).catch(() => null);
+                if (!channel) {
+                    session.failCount++;
+                    console.warn(`[Warning] Could not fetch channel ID: ${channelId}`);
+                    continue;
+                }
+
+                const typingDuration = Math.min(Math.max(session.messageContent.length * 110, 3500), 9000);
+                await channel.sendTyping().catch(() => {});
+                await new Promise(resolve => setTimeout(resolve, typingDuration));
+
+                const dynamicTokens = [' ', '  ', '\u200B', '\u200C', '\u200D', ' \u200B'];
+                const randomVariant = dynamicTokens[Math.floor(Math.random() * dynamicTokens.length)];
+                const finalPayload = session.messageContent + randomVariant;
+
+                await channel.send(finalPayload);
+                session.sentCount++;
+
+                if (session.sentCount > 0 && session.sentCount % 35 === 0) {
+                    console.log(`[Stability Cool-down] Reached ${session.sentCount} total messages. Pausing loop for 5 minutes...`);
+                    await new Promise(resolve => setTimeout(resolve, 5 * 60 * 1000));
+                    if (!session.isRunning || session.activeClient !== userClient) return;
+                }
+            } catch (err) {
+                session.failCount++;
+                console.error(`[Execution Error] Channel ${channelId}:`, err.message);
+                
+                if (err.status === 401 || err.status === 403 || (err.message && (err.message.toLowerCase().includes('unauthorized') || err.message.toLowerCase().includes('token')))) {
+                    stopAutomationForTokenUser(tokenUserId, 'Your user token has become invalid, changed, or expired.');
+                    return;
+                }
+
+                if (err.status === 429 || (err.message && err.message.toLowerCase().includes('rate limit'))) {
+                    console.warn('[Rate Limit Guard] Rate limit hit. Enforcing 60-second backoff...');
+                    await new Promise(resolve => setTimeout(resolve, 60000));
+                }
+            }
+
+            const channelBuffer = Math.floor(Math.random() * 6000) + 6000;
+            await new Promise(resolve => setTimeout(resolve, channelBuffer));
+        }
+
+        if (session.isRunning && session.activeClient === userClient) {
+            const randomDelaySecs = Math.floor(Math.random() * (session.maxDelay - session.minDelay + 1)) + session.minDelay;
+            session.timeoutId = setTimeout(runLoop, randomDelaySecs * 1000);
+        }
+    };
 
     userClient.on('error', (err) => {
         console.error('[Selfbot Gateway Error]:', err.message);
+        if (err.message && (err.message.toLowerCase().includes('token') || err.message.toLowerCase().includes('auth') || err.message.toLowerCase().includes('unauthorized'))) {
+            stopAutomationForTokenUser(tokenUserId, 'Encountered a gateway authentication error (token changed or unauthorized).');
+        }
     });
 
-    userClient.login(token).catch((err) => {
-        console.error(`[Login Critical Error] Failed to authenticate user token: ${err.message}`);
-        stopAutomation();
-    });
+    session.timeoutId = setTimeout(runLoop, initialDelaySecs * 1000);
 }
 
 controlBot.on('interactionCreate', async interaction => {
@@ -307,9 +567,180 @@ controlBot.on('interactionCreate', async interaction => {
             return;
         }
 
+        const userId = interaction.user.id;
+        
+        let userSession = null;
+        for (const [tokenUserId, session] of activeSessions.entries()) {
+            if (session.panelUserId === userId) {
+                userSession = session;
+                break;
+            }
+        }
+        if (!userSession) {
+            userSession = {
+                isRunning: false,
+                sentCount: 0,
+                failCount: 0,
+                timeoutId: null,
+                targetChannels: [],
+                messageContent: '',
+                minDelay: 90,
+                maxDelay: 180,
+                userToken: null,
+                activeClient: null,
+                currentProxy: null,
+                panelUserId: userId
+            };
+        }
+
         if (interaction.isChatInputCommand()) {
-            if (interaction.commandName === 'admin_proxies') {
-                if (interaction.user.id !== ADMIN_USER_ID) {
+            if (interaction.commandName === 'admin-session-command') {
+                if (userId !== ADMIN_USER_ID) {
+                    return interaction.reply({ content: '❌ You do not have permission to use this administrative command.', ephemeral: true });
+                }
+
+                const action = interaction.options.getString('action');
+                const targetUserInput = interaction.options.getString('target_user_id');
+                let restrictedUsers = getRestrictedUsers();
+
+                if (action === 'restricted_users') {
+                    const listText = restrictedUsers.length > 0 
+                        ? restrictedUsers.map((id, index) => `\`${index + 1}.\` <@${id}> (\`${id}\`)`).join('\n') 
+                        : 'No users are currently restricted.';
+                    
+                    const embed = new EmbedBuilder()
+                        .setTitle('🛡️ Restricted Users List')
+                        .setDescription(listText)
+                        .setColor(0xED4245)
+                        .setFooter({ text: `Total Restricted Users: ${restrictedUsers.length}` })
+                        .setTimestamp();
+                    return interaction.reply({ embeds: [embed], ephemeral: true });
+                }
+
+                if (action === 'stop_ads_all') {
+                    if (activeSessions.size === 0) {
+                        return interaction.reply({ content: '⚠️ There are no active advertising sessions currently running.', ephemeral: true });
+                    }
+
+                    const panelUserIdsToNotify = new Set();
+                    for (const [tokenUserId, session] of activeSessions.entries()) {
+                        if (session.panelUserId) {
+                            panelUserIdsToNotify.add(session.panelUserId);
+                        }
+                        if (session.currentProxy) {
+                            const pool = getProxyPool();
+                            if (!pool.includes(session.currentProxy)) {
+                                pool.push(session.currentProxy);
+                                saveProxyPool(pool);
+                            }
+                            removeAssignedProxyTracking(session.currentProxy);
+                        }
+                        session.isRunning = false;
+                        session.sentCount = 0;
+                        if (session.timeoutId) {
+                            clearTimeout(session.timeoutId);
+                            session.timeoutId = null;
+                        }
+                        if (session.activeClient) {
+                            try { session.activeClient.destroy(); } catch {}
+                            session.activeClient = null;
+                        }
+                    }
+
+                    activeSessions.clear();
+
+                    for (const panelOwnerId of panelUserIdsToNotify) {
+                        await notifyMaintenanceStopped(panelOwnerId);
+                    }
+
+                    return interaction.reply({ content: `✅ Successfully terminated **all active sessions** and sent maintenance notification DMs to **${panelUserIdsToNotify.size}** panel owner(s).`, ephemeral: true });
+                }
+
+                if (!targetUserInput) {
+                    return interaction.reply({ content: '❌ You must provide the `target_user_id` option for this action.', ephemeral: true });
+                }
+
+                const targetId = targetUserInput.trim();
+
+                if (action === 'stop_ads') {
+                    if (activeSessions.has(targetId)) {
+                        stopAutomationForTokenUser(targetId, 'Stopped by an administrator.');
+                        return interaction.reply({ content: `✅ Successfully stopped active advertising session for token user ID \`${targetId}\`.`, ephemeral: true });
+                    } else {
+                        let foundByPanel = false;
+                        for (const [tId, sess] of activeSessions.entries()) {
+                            if (sess.panelUserId === targetId) {
+                                stopAutomationForTokenUser(tId, 'Stopped by an administrator.');
+                                foundByPanel = true;
+                                break;
+                            }
+                        }
+                        if (foundByPanel) {
+                            return interaction.reply({ content: `✅ Successfully stopped active advertising session for user ID \`${targetId}\`.`, ephemeral: true });
+                        }
+                        return interaction.reply({ content: `⚠️ No active advertising session found for user ID \`${targetId}\`.`, ephemeral: true });
+                    }
+                } 
+                else if (action === 'restrict') {
+                    stopAutomationForTokenUser(targetId, 'Account restricted by an administrator.');
+                    for (const [tId, sess] of activeSessions.entries()) {
+                        if (sess.panelUserId === targetId) {
+                            stopAutomationForTokenUser(tId, 'Account restricted by an administrator.');
+                        }
+                    }
+
+                    if (!restrictedUsers.includes(targetId)) {
+                        restrictedUsers.push(targetId);
+                        saveRestrictedUsers(restrictedUsers);
+                    }
+                    return interaction.reply({ content: `🚫 Successfully restricted user ID \`${targetId}\`. They can no longer start advertising campaigns until unrestricted.`, ephemeral: true });
+                } 
+                else if (action === 'unrestrict') {
+                    const index = restrictedUsers.indexOf(targetId);
+                    if (index !== -1) {
+                        restrictedUsers.splice(index, 1);
+                        saveRestrictedUsers(restrictedUsers);
+                    }
+                    return interaction.reply({ content: `✅ Successfully unrestricted user ID \`${targetId}\`. They can now start advertising campaigns again.`, ephemeral: true });
+                }
+            }
+            else if (interaction.commandName === 'admin-active-status') {
+                if (userId !== ADMIN_USER_ID) {
+                    return interaction.reply({ content: '❌ You do not have permission to use this administrative command.', ephemeral: true });
+                }
+
+                if (activeSessions.size === 0) {
+                    const embed = new EmbedBuilder()
+                        .setTitle('🛡️ Admin Active Status')
+                        .setDescription('❌ No active advertising sessions are currently running across any token.')
+                        .setColor(0xED4245)
+                        .setTimestamp();
+                    return interaction.reply({ embeds: [embed], ephemeral: true });
+                }
+
+                const embed = new EmbedBuilder()
+                    .setTitle('🛡️ Admin Active Status Report')
+                    .setColor(0x57F287)
+                    .setTimestamp();
+
+                let descriptionLines = [];
+                for (const [tokenUserId, session] of activeSessions.entries()) {
+                    if (session.isRunning) {
+                        const tag = session.activeClient && session.activeClient.user ? session.activeClient.user.tag : 'Unknown';
+                        descriptionLines.push(`• **Token User ID:** \`${tokenUserId}\` (${tag})\n  - **Panel User ID:** \`${session.panelUserId}\`\n  - **Sent:** ${session.sentCount} | **Failed:** ${session.failCount} | **Channels:** ${session.targetChannels.length}\n  - **Proxy:** \`${session.currentProxy || 'N/A'}\``);
+                    }
+                }
+
+                if (descriptionLines.length === 0) {
+                    embed.setDescription('❌ No active campaigns currently running.');
+                } else {
+                    embed.setDescription(descriptionLines.join('\n\n'));
+                }
+
+                return interaction.reply({ embeds: [embed], ephemeral: true });
+            }
+            else if (interaction.commandName === 'admin_proxies') {
+                if (userId !== ADMIN_USER_ID) {
                     return interaction.reply({ content: '❌ You do not have permission to use this administrative command.', ephemeral: true });
                 }
 
@@ -359,9 +790,18 @@ controlBot.on('interactionCreate', async interaction => {
                 }
             }
             else if (interaction.commandName === 'panel') {
+                const memberRoles = interaction.member.roles;
+                const hasRole = memberRoles instanceof Array 
+                    ? memberRoles.some(rId => ALLOWED_ROLES.includes(rId))
+                    : (memberRoles.cache ? memberRoles.cache.some(role => ALLOWED_ROLES.includes(role.id)) : false);
+
+                if (!hasRole && userId !== ADMIN_USER_ID) {
+                    return interaction.reply({ content: '❌ You do not have the required role to use this command.', ephemeral: true });
+                }
+
                 const embed = new EmbedBuilder()
                     .setTitle('🚀 Elite Broadcast Automation Suite')
-                    .setDescription('Welcome to the enterprise-grade automated broadcasting dashboard. Launch and manage your continuous engagement campaigns securely and efficiently.\n\n**💡 Management Commands:**\n• Use `/adv status` to check your running campaign metrics.\n• Use `/adv stop` to safely terminate an active broadcast loop.')
+                    .setDescription('Welcome to your personal enterprise-grade automated broadcasting dashboard. Launch, configure, and manage your continuous engagement campaigns securely and efficiently.\n\n**💡 Management Commands:**\n• Use `/adv status` to check your running campaign metrics.\n• Use `/adv stop` to safely terminate your active broadcast loop.')
                     .setColor(0x5865F2)
                     .addFields({ name: 'System Integrity', value: 'Ensure proper configurations are set to maintain continuous, uninterrupted service.', inline: false })
                     .setFooter({ text: 'Broadcast Control Panel' })
@@ -369,10 +809,15 @@ controlBot.on('interactionCreate', async interaction => {
 
                 const row = new ActionRowBuilder().addComponents(
                     new ButtonBuilder()
-                        .setCustomId('open_adv_modal')
+                        .setCustomId('start_adv_direct')
                         .setLabel('Start Advertising')
                         .setStyle(ButtonStyle.Success)
-                        .setEmoji('🚀')
+                        .setEmoji('🚀'),
+                    new ButtonBuilder()
+                        .setCustomId('open_adv_modal')
+                        .setLabel('Config')
+                        .setStyle(ButtonStyle.Primary)
+                        .setEmoji('⚙️')
                 );
 
                 await interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
@@ -383,135 +828,174 @@ controlBot.on('interactionCreate', async interaction => {
                     const statusEmbed = new EmbedBuilder()
                         .setTitle('📊 Advertisement Status Report')
                         .addFields(
-                            { name: 'Status', value: advState.isRunning ? '🟢 Running' : '🔴 Stopped', inline: true },
-                            { name: 'Messages Sent', value: `${advState.sentCount}`, inline: true },
-                            { name: 'Failed Attempts', value: `${advState.failCount}`, inline: true },
-                            { name: 'Delay Range', value: `${advState.minDelay}s - ${advState.maxDelay}s`, inline: false }
+                            { name: 'Status', value: userSession.isRunning ? '🟢 Running' : '🔴 Stopped', inline: true },
+                            { name: 'Messages Sent', value: `${userSession.sentCount}`, inline: true },
+                            { name: 'Failed Attempts', value: `${userSession.failCount}`, inline: true },
+                            { name: 'Delay Range', value: `${userSession.minDelay}s - ${userSession.maxDelay}s`, inline: false }
                         )
-                        .setColor(advState.isRunning ? 0x57F287 : 0xED4245)
+                        .setColor(userSession.isRunning ? 0x57F287 : 0xED4245)
                         .setTimestamp();
 
                     await interaction.reply({ embeds: [statusEmbed], ephemeral: true });
                 } 
                 else if (sub === 'stop') {
-                    if (!advState.isRunning) {
-                        return interaction.reply({ content: '⚠️ Advertising automation is not currently running.', ephemeral: true });
+                    if (!userSession.isRunning) {
+                        return interaction.reply({ content: '⚠️ Your advertising automation is not currently running.', ephemeral: true });
                     }
-                    stopAutomation();
-                    await interaction.reply({ content: '🛑 Advertising automation has been successfully terminated.', ephemeral: true });
+                    if (userSession.activeClient && userSession.activeClient.user) {
+                        stopAutomationForTokenUser(userSession.activeClient.user.id, 'Manually stopped via command.');
+                    } else {
+                        stopAutomationForTokenUser(userSession.panelUserId, 'Manually stopped via command.');
+                    }
+                    await interaction.reply({ content: '🛑 Your advertising automation has been successfully terminated.', ephemeral: true });
                 }
             }
         }
-        else if (interaction.isButton() && interaction.customId === 'open_adv_modal') {
-            const modal = new ModalBuilder()
-                .setCustomId('adv_config_modal')
-                .setTitle('Configure Campaign');
+        else if (interaction.isButton()) {
+            if (interaction.customId === 'start_adv_direct') {
+                const restrictedUsers = getRestrictedUsers();
+                if (restrictedUsers.includes(userId)) {
+                    return interaction.reply({ content: '❌ **Access Denied:** Your panel account has been restricted from starting advertising campaigns by an administrator.', ephemeral: true });
+                }
 
-            const tokenInput = new TextInputBuilder()
-                .setCustomId('adv_token')
-                .setLabel('Discord User Token')
-                .setStyle(TextInputStyle.Short)
-                .setPlaceholder('Paste user token here...')
-                .setRequired(true);
+                const savedCfg = loadCampaignConfig(userId);
+                if (!savedCfg || !savedCfg.userToken || !savedCfg.targetChannels || savedCfg.targetChannels.length === 0 || !savedCfg.messageContent) {
+                    return interaction.reply({ content: '❌ No saved campaign configuration found for your account. Please click **Config** first to set up your token, channels, and message.', ephemeral: true });
+                }
 
-            const channelsInput = new TextInputBuilder()
-                .setCustomId('adv_channels')
-                .setLabel('Channel IDs (Comma separated)')
-                .setStyle(TextInputStyle.Short)
-                .setPlaceholder('123456789012345678, 876543210987654321')
-                .setRequired(true);
+                if (restrictedUsers.includes(savedCfg.userToken)) {
+                    return interaction.reply({ content: '❌ **Access Denied:** The token user ID configured for your campaign has been restricted by an administrator.', ephemeral: true });
+                }
 
-            const messageInput = new TextInputBuilder()
-                .setCustomId('adv_message')
-                .setLabel('Advertisement Message')
-                .setStyle(TextInputStyle.Paragraph)
-                .setPlaceholder('Type your advertisement message here...')
-                .setRequired(true);
+                const pool = getProxyPool();
+                if (pool.length === 0) {
+                    return interaction.reply({ content: '❌ **Resource Pool Exhausted!** No resources available.', ephemeral: true });
+                }
 
-            const delayInput = new TextInputBuilder()
-                .setCustomId('adv_delay')
-                .setLabel('Delay Range (Min-Max Seconds, e.g. 90-180)')
-                .setStyle(TextInputStyle.Short)
-                .setPlaceholder('90-180')
-                .setRequired(true);
+                const assignedProxy = pool.shift();
+                saveProxyPool(pool);
 
-            modal.addComponents(
-                new ActionRowBuilder().addComponents(tokenInput),
-                new ActionRowBuilder().addComponents(channelsInput),
-                new ActionRowBuilder().addComponents(messageInput),
-                new ActionRowBuilder().addComponents(delayInput)
-            );
+                await interaction.deferReply({ ephemeral: true });
 
-            await interaction.showModal(modal);
-        }
-        else if (interaction.isModalSubmit() && interaction.customId === 'adv_config_modal') {
-            if (advState.isRunning) {
-                return interaction.reply({ content: '⚠️ An advertising process is already active. Stop it first using `/adv stop`.', ephemeral: true });
+                const validationResult = await validateAndStartCampaign(userId, savedCfg.userToken, assignedProxy, savedCfg.targetChannels);
+                if (!validationResult.success) {
+                    pool.push(assignedProxy);
+                    saveProxyPool(pool);
+                    return interaction.editReply({ content: validationResult.error });
+                }
+
+                const session = validationResult.session;
+                const tokenUserId = session.activeClient.user.id;
+
+                if (restrictedUsers.includes(tokenUserId)) {
+                    session.activeClient.destroy();
+                    pool.push(assignedProxy);
+                    saveProxyPool(pool);
+                    activeSessions.delete(tokenUserId);
+                    removeAssignedProxyTracking(assignedProxy);
+                    return interaction.editReply({ content: '❌ **Access Denied:** This token user ID has been restricted from running campaigns by an administrator.' });
+                }
+
+                session.messageContent = savedCfg.messageContent;
+                session.minDelay = savedCfg.minDelay || 90;
+                session.maxDelay = savedCfg.maxDelay || 180;
+
+                setupClientLoop(tokenUserId, session);
+
+                await interaction.editReply({ 
+                    content: `🚀 **Campaign Started Successfully!**\nTargeting **${savedCfg.targetChannels.length} channel(s)**.` 
+                });
             }
+            else if (interaction.customId === 'open_adv_modal') {
+                const savedCfg = loadCampaignConfig(userId);
 
-            const pool = getProxyPool();
-            if (pool.length === 0) {
-                return interaction.reply({ 
-                    content: '❌ **Resource Pool Exhausted!** Campaign blocked because no resources are available. Contact an administrator.', 
+                const modal = new ModalBuilder()
+                    .setCustomId('adv_config_modal')
+                    .setTitle('Configure Campaign');
+
+                const tokenInput = new TextInputBuilder()
+                    .setCustomId('adv_token')
+                    .setLabel('Discord User Token')
+                    .setStyle(TextInputStyle.Short)
+                    .setPlaceholder('Paste user token here...')
+                    .setValue(savedCfg && savedCfg.userToken ? savedCfg.userToken : '')
+                    .setRequired(true);
+
+                const channelsInput = new TextInputBuilder()
+                    .setCustomId('adv_channels')
+                    .setLabel('Channel IDs (Comma separated)')
+                    .setStyle(TextInputStyle.Short)
+                    .setPlaceholder('123456789012345678, 876543210987654321')
+                    .setValue(savedCfg && savedCfg.targetChannels ? savedCfg.targetChannels.join(', ') : '')
+                    .setRequired(true);
+
+                const messageInput = new TextInputBuilder()
+                    .setCustomId('adv_message')
+                    .setLabel('Advertisement Message')
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setPlaceholder('Type your advertisement message here...')
+                    .setValue(savedCfg && savedCfg.messageContent ? savedCfg.messageContent : '')
+                    .setRequired(true);
+
+                const delayInput = new TextInputBuilder()
+                    .setCustomId('adv_delay')
+                    .setLabel('Delay Range (Min-Max Seconds, e.g. 90-180)')
+                    .setStyle(TextInputStyle.Short)
+                    .setPlaceholder('90-180')
+                    .setValue(savedCfg && savedCfg.minDelay && savedCfg.maxDelay ? `${savedCfg.minDelay}-${savedCfg.maxDelay}` : '90-180')
+                    .setRequired(true);
+
+                modal.addComponents(
+                    new ActionRowBuilder().addComponents(tokenInput),
+                    new ActionRowBuilder().addComponents(channelsInput),
+                    new ActionRowBuilder().addComponents(messageInput),
+                    new ActionRowBuilder().addComponents(delayInput)
+                );
+
+                await interaction.showModal(modal);
+            }
+        }
+        else if (interaction.isModalSubmit()) {
+            if (interaction.customId === 'adv_config_modal') {
+                const token = interaction.fields.getTextInputValue('adv_token').trim().replace(/^["'](.+)["']$/, '$1');
+                const channelsRaw = interaction.fields.getTextInputValue('adv_channels');
+                const messageContent = interaction.fields.getTextInputValue('adv_message');
+                const delayRaw = interaction.fields.getTextInputValue('adv_delay').trim();
+
+                let min = 90, max = 180;
+                if (delayRaw.includes('-')) {
+                    const parts = delayRaw.split('-').map(p => parseInt(p.trim(), 10));
+                    if (!isNaN(parts[0]) && !isNaN(parts[1])) {
+                        min = parts[0];
+                        max = parts[1];
+                    }
+                } else {
+                    const val = parseInt(delayRaw, 10);
+                    if (!isNaN(val)) min = max = val;
+                }
+
+                if (min < 60 || max < min) {
+                    return interaction.reply({ content: '❌ Minimum delay must be at least 60 seconds.', ephemeral: true });
+                }
+
+                const channels = channelsRaw.split(',').map(id => id.trim()).filter(id => id.length > 0);
+                if (channels.length === 0) {
+                    return interaction.reply({ content: '❌ No valid channel IDs provided.', ephemeral: true });
+                }
+
+                saveCampaignConfig(userId, {
+                    targetChannels: channels,
+                    messageContent: messageContent,
+                    minDelay: min,
+                    maxDelay: max,
+                    userToken: token
+                });
+
+                await interaction.reply({ 
+                    content: `✅ **Configuration Saved Successfully!**\nYou can now click **Start Advertising** to launch your campaign with these settings.`, 
                     ephemeral: true 
                 });
             }
-
-            const token = interaction.fields.getTextInputValue('adv_token').trim().replace(/^["'](.+)["']$/, '$1');
-            const channelsRaw = interaction.fields.getTextInputValue('adv_channels');
-            const messageContent = interaction.fields.getTextInputValue('adv_message');
-            const delayRaw = interaction.fields.getTextInputValue('adv_delay').trim();
-
-            let min = 90, max = 180;
-            if (delayRaw.includes('-')) {
-                const parts = delayRaw.split('-').map(p => parseInt(p.trim(), 10));
-                if (!isNaN(parts[0]) && !isNaN(parts[1])) {
-                    min = parts[0];
-                    max = parts[1];
-                }
-            } else {
-                const val = parseInt(delayRaw, 10);
-                if (!isNaN(val)) min = max = val;
-            }
-
-            if (min < 60 || max < min) {
-                return interaction.reply({ content: '❌ Minimum delay must be at least 60 seconds.', ephemeral: true });
-            }
-
-            const channels = channelsRaw.split(',').map(id => id.trim()).filter(id => id.length > 0);
-            if (channels.length === 0) {
-                return interaction.reply({ content: '❌ No valid channel IDs provided.', ephemeral: true });
-            }
-
-            const assignedProxy = pool.shift();
-            saveProxyPool(pool); 
-
-            await interaction.deferReply({ ephemeral: true });
-
-            advState.targetChannels = channels;
-            advState.messageContent = messageContent;
-            advState.minDelay = min;
-            advState.maxDelay = max;
-            advState.userToken = token;
-            advState.currentProxy = assignedProxy;
-
-            saveCampaignConfig({
-                isRunning: true,
-                targetChannels: channels,
-                messageContent: messageContent,
-                minDelay: min,
-                maxDelay: max,
-                userToken: token,
-                currentProxy: assignedProxy,
-                sentCount: 0,
-                failCount: 0
-            });
-
-            initializeAndRunSelfbot(token, assignedProxy, false);
-
-            await interaction.editReply({ 
-                content: `🚀 **Campaign Initialized Safely!**\nTargeting **${channels.length} channel(s)**.` 
-            });
         }
     } catch (error) {
         console.error('Interaction error:', error);
@@ -521,32 +1005,48 @@ controlBot.on('interactionCreate', async interaction => {
     }
 });
 
-function stopAutomation() {
-    if (advState.currentProxy) {
-        const pool = getProxyPool();
-        if (!pool.includes(advState.currentProxy)) {
-            pool.push(advState.currentProxy);
-            saveProxyPool(pool);
+function stopAutomationForTokenUser(identifier, reason = 'Your campaign was terminated.') {
+    let session = activeSessions.get(identifier);
+    let tokenUserIdKey = identifier;
+
+    if (!session) {
+        for (const [tId, sess] of activeSessions.entries()) {
+            if (sess.panelUserId === identifier) {
+                session = sess;
+                tokenUserIdKey = tId;
+                break;
+            }
         }
     }
 
-    advState.isRunning = false;
-    if (advState.timeoutId) {
-        clearTimeout(advState.timeoutId);
-        advState.timeoutId = null;
-    }
-    if (advState.activeClient) {
-        try {
-            advState.activeClient.destroy();
-        } catch {}
-        advState.activeClient = null;
-    }
-    advState.userToken = null;
-    advState.currentProxy = null;
+    if (!session) return;
 
-    if (fs.existsSync(CONFIG_FILE)) {
-        try { fs.unlinkSync(CONFIG_FILE); } catch {}
+    if (session.currentProxy) {
+        const pool = getProxyPool();
+        if (!pool.includes(session.currentProxy)) {
+            pool.push(session.currentProxy);
+            saveProxyPool(pool);
+        }
+        removeAssignedProxyTracking(session.currentProxy);
     }
+
+    session.isRunning = false;
+    session.sentCount = 0;
+    if (session.timeoutId) {
+        clearTimeout(session.timeoutId);
+        session.timeoutId = null;
+    }
+    if (session.activeClient) {
+        try {
+            session.activeClient.destroy();
+        } catch {}
+        session.activeClient = null;
+    }
+    
+    const panelUserId = session.panelUserId;
+    activeSessions.delete(tokenUserIdKey);
+
+    notifyUserStopped(panelUserId, reason);
 }
 
 controlBot.login(process.env.DISCORD_TOKEN);
