@@ -19,9 +19,9 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 
-const ALLOWED_GUILDS = ['1493598034544820284', '1402276801065123942'];
+const ALLOWED_GUILDS = ['1446872039200653406', '1493598034544820284'];
 const ADMIN_USER_ID = '1277163202614001706';
-const ALLOWED_ROLES = ['1411527879162069022', '1512135398472548623'];
+const ALLOWED_ROLES = ['1446872039200653407', '1512135398472548623'];
 const CONFIG_DIR = path.join(__dirname, 'user_configs');
 const PROXIES_FILE = path.join(__dirname, 'proxies.json');
 const ASSIGNED_PROXIES_FILE = path.join(__dirname, 'assigned_proxies.json');
