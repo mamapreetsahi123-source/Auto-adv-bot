@@ -95,6 +95,7 @@ function getProxyPool() {
     }
     
     const defaultProxies = [
+        // Batch 1 (vqvtbsll)
         'vqvtbsll:delzv7dc3d6h@31.59.20.176:6754',
         'vqvtbsll:delzv7dc3d6h@31.56.127.193:7684',
         'vqvtbsll:delzv7dc3d6h@45.38.107.97:6014',
@@ -105,6 +106,8 @@ function getProxyPool() {
         'vqvtbsll:delzv7dc3d6h@84.247.60.125:6095',
         'vqvtbsll:delzv7dc3d6h@142.111.67.146:5611',
         'vqvtbsll:delzv7dc3d6h@191.96.254.138:6185',
+
+        // Batch 2 (jeifitnv)
         'jeifitnv:s1pibxrtd5hx@31.59.20.176:6754',
         'jeifitnv:s1pibxrtd5hx@31.56.127.193:7684',
         'jeifitnv:s1pibxrtd5hx@45.38.107.97:6014',
@@ -114,7 +117,19 @@ function getProxyPool() {
         'jeifitnv:s1pibxrtd5hx@38.154.185.97:6370',
         'jeifitnv:s1pibxrtd5hx@84.247.60.125:6095',
         'jeifitnv:s1pibxrtd5hx@142.111.67.146:5611',
-        'jeifitnv:s1pibxrtd5hx@191.96.254.138:6185'
+        'jeifitnv:s1pibxrtd5hx@191.96.254.138:6185',
+
+        // Batch 3 (uidqjnvk)
+        'uidqjnvk:j57c2390c6uj@31.59.20.176:6754',
+        'uidqjnvk:j57c2390c6uj@45.38.107.97:6014',
+        'uidqjnvk:j57c2390c6uj@198.105.121.200:6462',
+        'uidqjnvk:j57c2390c6uj@64.137.96.74:6641',
+        'uidqjnvk:j57c2390c6uj@198.23.243.226:6361',
+        'uidqjnvk:j57c2390c6uj@38.154.185.97:6370',
+        'uidqjnvk:j57c2390c6uj@84.247.60.125:6095',
+        'uidqjnvk:j57c2390c6uj@142.111.67.146:5611',
+        'uidqjnvk:j57c2390c6uj@191.96.254.138:6185',
+        'uidqjnvk:j57c2390c6uj@31.58.9.4:6077'
     ];
     saveProxyPool(defaultProxies);
     return defaultProxies;
@@ -155,7 +170,6 @@ function removeAssignedProxyTracking(proxyString) {
     }
 }
 
-// On startup, sweep any orphaned assigned proxies back into the main pool immediately (Handles hard crashes)
 function recoverOrphanedProxiesOnStartup() {
     try {
         if (fs.existsSync(ASSIGNED_PROXIES_FILE)) {
@@ -198,7 +212,6 @@ function returnAllActiveProxies() {
             }
         }
 
-        // Also check disk assigned tracking
         if (fs.existsSync(ASSIGNED_PROXIES_FILE)) {
             const assigned = JSON.parse(fs.readFileSync(ASSIGNED_PROXIES_FILE, 'utf8'));
             for (const p of assigned) {
@@ -219,21 +232,9 @@ function returnAllActiveProxies() {
     }
 }
 
-// Safety hooks
-process.on('exit', () => {
-    returnAllActiveProxies();
-});
-
-process.on('SIGINT', () => {
-    returnAllActiveProxies();
-    process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-    returnAllActiveProxies();
-    process.exit(0);
-});
-
+process.on('exit', () => { returnAllActiveProxies(); });
+process.on('SIGINT', () => { returnAllActiveProxies(); process.exit(0); });
+process.on('SIGTERM', () => { returnAllActiveProxies(); process.exit(0); });
 process.on('uncaughtException', (err) => {
     console.error('[Uncaught Exception]:', err);
     returnAllActiveProxies();
@@ -261,9 +262,8 @@ setInterval(async () => {
     const memoryUsageMB = process.memoryUsage().rss / 1024 / 1024;
     const heapUsedMB = process.memoryUsage().heapUsed / 1024 / 1024;
     
-    // Proactive trigger set lower (~550MB RSS) to cleanly catch it *before* V8 throws a hard OOM crash
     if (memoryUsageMB >= 550 || heapUsedMB >= 380) {
-        console.log(`[Memory Guardian] RAM usage reached RSS: ${memoryUsageMB.toFixed(2)} MB, Heap: ${heapUsedMB.toFixed(2)} MB. Notifying users, returning assigned proxies to pool and restarting process safely...`);
+        console.log(`[Memory Guardian] RAM usage reached RSS: ${memoryUsageMB.toFixed(2)} MB, Heap: ${heapUsedMB.toFixed(2)} MB. Restarting safely...`);
         
         const panelUserIdsToNotify = new Set();
         for (const [tokenUserId, session] of activeSessions.entries()) {
@@ -276,7 +276,6 @@ setInterval(async () => {
         }
 
         await Promise.all(Array.from(panelUserIdsToNotify).map(id => notifyMemoryRestart(id)));
-
         returnAllActiveProxies();
         process.exit(1);
     }
@@ -435,7 +434,6 @@ async function validateAndStartCampaign(panelUserId, token, proxyString, targetC
 
         const actualTokenUserId = testClient.user.id;
 
-        // Validate target channels
         for (const channelId of targetChannels) {
             const channel = await testClient.channels.fetch(channelId).catch(() => null);
             if (!channel) {
@@ -444,7 +442,6 @@ async function validateAndStartCampaign(panelUserId, token, proxyString, targetC
             }
         }
 
-        // Clean up previous token session if exists
         if (activeSessions.has(actualTokenUserId)) {
             const existing = activeSessions.get(actualTokenUserId);
             if (existing.activeClient) {
@@ -469,6 +466,7 @@ async function validateAndStartCampaign(panelUserId, token, proxyString, targetC
             messageContent: '',
             minDelay: 90,
             maxDelay: 180,
+            autoResponder: '',
             userToken: token,
             activeClient: testClient,
             currentProxy: proxyString,
@@ -491,6 +489,39 @@ function setupClientLoop(tokenUserId, session) {
     const userClient = session.activeClient;
     console.log(`[Selfbot Engine] Successfully authenticated as ${userClient.user.tag} with dedicated proxy routing`);
 
+    // ==========================================
+    // AUTO-RESPONDER (SENDS ONLY ONCE PER USER DM)
+    // ==========================================
+    if (session.autoResponder && session.autoResponder.trim().length > 0) {
+        const repliedUserIds = new Set();
+
+        userClient.on('messageCreate', async (msg) => {
+            try {
+                if (msg.guild !== null) return;
+                if (msg.author.id === userClient.user.id || msg.author.bot) return;
+                if (!session.isRunning || session.activeClient !== userClient) return;
+                if (repliedUserIds.has(msg.author.id)) return;
+
+                repliedUserIds.add(msg.author.id);
+
+                await msg.channel.sendTyping().catch(() => {});
+                const typingDelay = Math.floor(Math.random() * 2000) + 2000;
+                await new Promise(resolve => setTimeout(resolve, typingDelay));
+
+                const invisibleTokens = ['\u200B', '\u200C', '\u200D', ' '];
+                const variant = invisibleTokens[Math.floor(Math.random() * invisibleTokens.length)];
+
+                await msg.channel.send(`${session.autoResponder} ${variant}`);
+                console.log(`[Auto-Responder] Sent one-time auto-reply to ${msg.author.tag} (${msg.author.id})`);
+            } catch (err) {
+                console.error(`[Auto-Responder Error] Could not reply to ${msg.author.id}:`, err.message);
+            }
+        });
+    }
+
+    // ==========================================
+    // BROADCAST CAMPAIGN LOOP
+    // ==========================================
     const initialDelaySecs = Math.floor(Math.random() * (session.maxDelay - session.minDelay + 1)) + session.minDelay;
 
     const runLoop = async () => {
@@ -586,6 +617,7 @@ controlBot.on('interactionCreate', async interaction => {
                 messageContent: '',
                 minDelay: 90,
                 maxDelay: 180,
+                autoResponder: '',
                 userToken: null,
                 activeClient: null,
                 currentProxy: null,
@@ -899,6 +931,7 @@ controlBot.on('interactionCreate', async interaction => {
                 session.messageContent = savedCfg.messageContent;
                 session.minDelay = savedCfg.minDelay || 90;
                 session.maxDelay = savedCfg.maxDelay || 180;
+                session.autoResponder = savedCfg.autoResponder || '';
 
                 setupClientLoop(tokenUserId, session);
 
@@ -945,11 +978,20 @@ controlBot.on('interactionCreate', async interaction => {
                     .setValue(savedCfg && savedCfg.minDelay && savedCfg.maxDelay ? `${savedCfg.minDelay}-${savedCfg.maxDelay}` : '90-180')
                     .setRequired(true);
 
+                const autoResponderInput = new TextInputBuilder()
+                    .setCustomId('adv_auto_responder')
+                    .setLabel('Auto Responder DM (Optional - Sent Once)')
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setPlaceholder('Leave blank to disable. Sends once when someone DMs you...')
+                    .setValue(savedCfg && savedCfg.autoResponder ? savedCfg.autoResponder : '')
+                    .setRequired(false);
+
                 modal.addComponents(
                     new ActionRowBuilder().addComponents(tokenInput),
                     new ActionRowBuilder().addComponents(channelsInput),
                     new ActionRowBuilder().addComponents(messageInput),
-                    new ActionRowBuilder().addComponents(delayInput)
+                    new ActionRowBuilder().addComponents(delayInput),
+                    new ActionRowBuilder().addComponents(autoResponderInput)
                 );
 
                 await interaction.showModal(modal);
@@ -961,6 +1003,13 @@ controlBot.on('interactionCreate', async interaction => {
                 const channelsRaw = interaction.fields.getTextInputValue('adv_channels');
                 const messageContent = interaction.fields.getTextInputValue('adv_message');
                 const delayRaw = interaction.fields.getTextInputValue('adv_delay').trim();
+                
+                let autoResponder = '';
+                try {
+                    autoResponder = interaction.fields.getTextInputValue('adv_auto_responder')?.trim() || '';
+                } catch {
+                    autoResponder = '';
+                }
 
                 let min = 90, max = 180;
                 if (delayRaw.includes('-')) {
@@ -988,11 +1037,12 @@ controlBot.on('interactionCreate', async interaction => {
                     messageContent: messageContent,
                     minDelay: min,
                     maxDelay: max,
+                    autoResponder: autoResponder,
                     userToken: token
                 });
 
                 await interaction.reply({ 
-                    content: `✅ **Configuration Saved Successfully!**\nYou can now click **Start Advertising** to launch your campaign with these settings.`, 
+                    content: `✅ **Configuration Saved Successfully!**\nAuto-responder status: ${autoResponder ? '🟢 **Enabled (One-Time DM)**' : '⚪ **Disabled**'}\nClick **Start Advertising** to launch your campaign.`, 
                     ephemeral: true 
                 });
             }
