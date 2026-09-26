@@ -490,10 +490,62 @@ function setupClientLoop(tokenUserId, session) {
     console.log(`[Selfbot Engine] Successfully authenticated as ${userClient.user.tag} with dedicated proxy routing`);
 
     // ==========================================
-    // AUTO-RESPONDER (SENDS ONLY ONCE PER USER DM)
+    // AUTO-RESPONDER (GUARANTEED >= 5s DELAY PER DM)
     // ==========================================
     if (session.autoResponder && session.autoResponder.trim().length > 0) {
         const repliedUserIds = new Set();
+        const dmQueue = [];
+        let isProcessingQueue = false;
+        let lastAutoReplyTimestamp = 0;
+
+        const processAutoReplyQueue = async () => {
+            if (isProcessingQueue) return;
+            isProcessingQueue = true;
+
+            while (dmQueue.length > 0) {
+                if (!session.isRunning || session.activeClient !== userClient) {
+                    dmQueue.length = 0;
+                    break;
+                }
+
+                const msg = dmQueue.shift();
+
+                // 1. Mandatory 5-second initial delay on EVERY DM (including the first one)
+                await new Promise(resolve => setTimeout(resolve, 5000));
+
+                if (!session.isRunning || session.activeClient !== userClient) {
+                    break;
+                }
+
+                // 2. Cooldown check: ensure at least 5s elapsed since the previous reply finished
+                const timeSinceLastReply = Date.now() - lastAutoReplyTimestamp;
+                if (lastAutoReplyTimestamp > 0 && timeSinceLastReply < 5000) {
+                    const remainingCooldown = 5000 - timeSinceLastReply;
+                    await new Promise(resolve => setTimeout(resolve, remainingCooldown));
+                }
+
+                if (!session.isRunning || session.activeClient !== userClient) {
+                    break;
+                }
+
+                try {
+                    await msg.channel.sendTyping().catch(() => {});
+                    const typingDelay = Math.floor(Math.random() * 2000) + 2000;
+                    await new Promise(resolve => setTimeout(resolve, typingDelay));
+
+                    const invisibleTokens = ['\u200B', '\u200C', '\u200D', ' '];
+                    const variant = invisibleTokens[Math.floor(Math.random() * invisibleTokens.length)];
+
+                    await msg.channel.send(`${session.autoResponder} ${variant}`);
+                    lastAutoReplyTimestamp = Date.now();
+                    console.log(`[Auto-Responder] Sent auto-reply to ${msg.author.tag} (${msg.author.id})`);
+                } catch (err) {
+                    console.error(`[Auto-Responder Error] Could not reply to ${msg.author.id}:`, err.message);
+                }
+            }
+
+            isProcessingQueue = false;
+        };
 
         userClient.on('messageCreate', async (msg) => {
             try {
@@ -502,19 +554,14 @@ function setupClientLoop(tokenUserId, session) {
                 if (!session.isRunning || session.activeClient !== userClient) return;
                 if (repliedUserIds.has(msg.author.id)) return;
 
+                // Track author immediately to avoid duplicate triggers
                 repliedUserIds.add(msg.author.id);
 
-                await msg.channel.sendTyping().catch(() => {});
-                const typingDelay = Math.floor(Math.random() * 2000) + 2000;
-                await new Promise(resolve => setTimeout(resolve, typingDelay));
-
-                const invisibleTokens = ['\u200B', '\u200C', '\u200D', ' '];
-                const variant = invisibleTokens[Math.floor(Math.random() * invisibleTokens.length)];
-
-                await msg.channel.send(`${session.autoResponder} ${variant}`);
-                console.log(`[Auto-Responder] Sent one-time auto-reply to ${msg.author.tag} (${msg.author.id})`);
+                // Queue message and process
+                dmQueue.push(msg);
+                processAutoReplyQueue();
             } catch (err) {
-                console.error(`[Auto-Responder Error] Could not reply to ${msg.author.id}:`, err.message);
+                console.error(`[Auto-Responder Error] Could not handle incoming DM:`, err.message);
             }
         });
     }
